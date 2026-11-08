@@ -47,9 +47,17 @@ export default {
       });
     }
 
-    const prompt = `Sei un verificatore per il gioco italiano "Nomi Cose Città".
-La parola "${word}" è una parola italiana valida (nome comune, nome proprio, città, animale, mestiere, colore, film, cantante, sport o cibo) che inizia con la lettera "${letter}"?
-Rispondi SOLO con "sì" o "no", senza altro testo.`;
+    // Istruzioni di sistema: ruolo e formato di risposta
+    const systemInstruction = `Sei un verificatore per il gioco italiano "Nomi Cose Città".
+Il tuo unico compito è determinare se una parola è valida per una data categoria e lettera iniziale.
+Una parola è valida se:
+- è una parola italiana esistente (nome comune, nome proprio, città, animale, mestiere, colore, film, cantante, sport o cibo);
+- inizia con la lettera indicata (indipendentemente da maiuscole/minuscole);
+- non è una parola inventata, un acronimo senza senso, o una frase.
+Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza punteggiatura aggiuntiva, senza altro testo.`;
+
+    // Messaggio utente: solo i dati della verifica
+    const userPrompt = `La parola "${word}" è valida per la lettera "${letter}"?`;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
@@ -58,7 +66,12 @@ Rispondi SOLO con "sì" o "no", senza altro testo.`;
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
+          systemInstruction: {
+            parts: [{ text: systemInstruction }]
+          },
+          contents: [
+            { role: 'user', parts: [{ text: userPrompt }] }
+          ],
           generationConfig: {
             temperature: 0,
             maxOutputTokens: 5,
