@@ -97,9 +97,9 @@ Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza 
       const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
       const normalized = text.trim().toLowerCase();
       // Una risposta vuota o inattesa è un errore di verifica, non un "no".
-      const valid = /^(sì|si)(?:[.!\\s]|$)/i.test(normalized)
+      const valid = /^(sì|si)(?:[.!\s]|$)/i.test(normalized)
         ? true
-        : /^no(?:[.!\\s]|$)/i.test(normalized) ? false : null;
+        : /^no(?:[.!\s]|$)/i.test(normalized) ? false : null;
 
       return new Response(JSON.stringify({ valid }), {
         status: 200,
