@@ -710,14 +710,14 @@ async function collectAndScore() {
     const entries = results[cat];
     const wordCounts = {};
     for (const e of entries) {
-      // Le risposte non verificabili per un guasto tecnico ricevono punti provvisori.
-      if (e.valid !== false && e.word) {
+      // Solo le risposte confermate valide partecipano al conteggio dei duplicati.
+      if (e.valid === true && e.word) {
         const key = e.word.toLowerCase();
         wordCounts[key] = (wordCounts[key] || 0) + 1;
       }
     }
     for (const e of entries) {
-      if (e.valid === false || !e.word) { e.points = 0; continue; }
+      if (e.valid !== true || !e.word) { e.points = 0; continue; }
       const key = e.word.toLowerCase();
       e.points = wordCounts[key] > 1 ? 5 : 10;
     }
@@ -740,7 +740,7 @@ async function collectAndScore() {
       const entry = results[cat].find(e => e.peerKey === firstKey);
       if (!entry) continue;
       if (entry.word) hasAnyWord = true;
-      // Un controllo non riuscito non invalida la parola, ma non concede il bonus.
+      // Il bonus è assegnato solo se tutte le risposte compilate sono confermate valide.
       if (entry.word && entry.valid !== true) { allValid = false; break; }
     }
     if (allValid && hasAnyWord) {
@@ -781,89 +781,33 @@ async function collectAndScore() {
 // ------------------------------------------------------------
 // VERIFICA PAROLE (con categoria)
 // ------------------------------------------------------------
-async function verifyCityWithWikidata(word) {
-  const normalize = value => String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase('it')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
-
-  try {
-    const searchUrl = new URL('https://www.wikidata.org/w/api.php');
-    searchUrl.search = new URLSearchParams({
-      action: 'wbsearchentities', search: word, language: 'it', uselang: 'it',
-      type: 'item', limit: '10', format: 'json', origin: '*',
-    });
-    const searchRes = await fetch(searchUrl);
-    if (!searchRes.ok) throw new Error('Wikidata search HTTP ' + searchRes.status);
-    const searchData = await searchRes.json();
-    const exact = (searchData.search || []).filter(item =>
-      normalize(item.label) === normalize(word) ||
-      (item.aliases || []).some(alias => normalize(alias) === normalize(word))
-    );
-    if (!exact.length) return false;
-
-    const ids = exact.map(item => item.id).filter(Boolean);
-    if (!ids.length) return false;
-    const entityUrl = new URL('https://www.wikidata.org/w/api.php');
-    entityUrl.search = new URLSearchParams({
-      action: 'wbgetentities', ids: ids.join('|'), props: 'claims',
-      format: 'json', origin: '*',
-    });
-    const entityRes = await fetch(entityUrl);
-    if (!entityRes.ok) throw new Error('Wikidata entities HTTP ' + entityRes.status);
-    const entityData = await entityRes.json();
-    // Classi di città, comuni, insediamenti e capitali presenti in Wikidata.
-    const cityTypes = new Set([
-      'Q515', 'Q3957', 'Q532', 'Q15284', 'Q747074', 'Q1637706', 'Q486972',
-      'Q200250', 'Q7930989', 'Q1549591', 'Q174844', 'Q5119'
-    ]);
-    return Object.values(entityData.entities || {}).some(entity =>
-      (entity.claims?.P31 || []).some(claim =>
-        cityTypes.has(claim.mainsnak?.datavalue?.value?.id)
-      )
-    );
-  } catch (error) {
-    console.warn('Wikidata error (fallback Gemini):', error);
-    return null;
-  }
-}
-
 async function verifyWord(word, letter, category) {
-  if (word.length < 2) return false;
-  if (word[0].toLocaleUpperCase('it') !== letter) return false;
+  const normalizedWord = String(word || '').trim();
+  const normalizedLetter = String(letter || '').trim().toLocaleUpperCase('it');
 
-  if (category === 'Città' && await verifyCityWithWikidata(word)) return true;
+  // Regole deterministiche: non chiediamo all'AI di correggere input formalmente errati.
+  if (normalizedWord.length < 2) return false;
+  if (!normalizedLetter || normalizedWord[0].toLocaleUpperCase('it') !== normalizedLetter) return false;
+  if (!category || typeof category !== 'string') return false;
 
-  if (category === 'Cose' || category === 'Nomi') {
-    try {
-      const url = 'https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=' + encodeURIComponent(word) + '&limit=10';
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        const wanted = word.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('it');
-        const match = (data[1] || []).some(title =>
-          title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('it') === wanted
-        );
-        if (match) return true;
-      }
-    } catch (error) {
-      console.warn('Wikipedia error:', error);
-    }
-  }
-
-  // Gemini resta il fallback per città non trovate in Wikidata e per le altre categorie.
+  // Tutte le categorie passano dallo stesso verificatore semantico.
+  // Wikipedia/Wikidata non decidono più la validità della risposta.
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ word, letter, category }),
+      body: JSON.stringify({
+        word: normalizedWord,
+        letter: normalizedLetter,
+        category: category.trim(),
+      }),
     });
+
     if (!res.ok) {
       console.warn('Worker verification HTTP error:', res.status);
       return null;
     }
+
     const data = await res.json();
     return data.valid === true ? true : data.valid === false ? false : null;
   } catch (error) {
@@ -882,8 +826,8 @@ function renderResults(results) {
   }
   const html = Object.entries(results).map(([cat, entries]) => {
     const rows = entries.map(e => {
-      const cls = e.word && !e.valid ? 'word-dup' : '';
-      const status = !e.word ? '(vuoto)' : e.valid === true ? '' : e.valid === false ? '(non valida)' : '(da verificare · punti provvisori)';
+      const cls = e.word && e.valid === false ? 'word-dup' : '';
+      const status = !e.word ? '(vuoto)' : e.valid === true ? '' : e.valid === false ? '(non valida)' : '(da verificare · 0 punti)';
       const bonusTag = e.bonusFlag ? `<span class="bonus-tag">+${STOP_BONUS}</span>` : '';
       return `
         <div class="result-row">
