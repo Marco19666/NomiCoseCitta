@@ -644,7 +644,7 @@ dom.btnDone.addEventListener('click', () => {
     state.send.done({ name: state.playerName, allFilled });
   } else if (state.isHost) {
     if (!state.firstDone && allFilled) {
-      state.firstDone = { name: state.playerName, allFilled: true };
+      state.firstDone = { peerKey: '__host__', allFilled: true };
     }
     checkAllDone();
   }
@@ -784,25 +784,19 @@ async function collectAndScore() {
 async function verifyCityWithWikidata(word) {
   const normalize = value => String(value || '')
     .normalize('NFD')
-    .replace(/[\\u0300-\\u036f]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLocaleLowerCase('it')
-    .replace(/[^\\p{L}\\p{N}]+/gu, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 
   try {
     const searchUrl = new URL('https://www.wikidata.org/w/api.php');
     searchUrl.search = new URLSearchParams({
-      action: 'wbsearchentities',
-      search: word,
-      language: 'it',
-      uselang: 'it',
-      type: 'item',
-      limit: '10',
-      format: 'json',
-      origin: '*',
+      action: 'wbsearchentities', search: word, language: 'it', uselang: 'it',
+      type: 'item', limit: '10', format: 'json', origin: '*',
     });
     const searchRes = await fetch(searchUrl);
-    if (!searchRes.ok) throw new Error(`Wikidata search HTTP ${searchRes.status}`);
+    if (!searchRes.ok) throw new Error('Wikidata search HTTP ' + searchRes.status);
     const searchData = await searchRes.json();
     const exact = (searchData.search || []).filter(item =>
       normalize(item.label) === normalize(word) ||
@@ -814,20 +808,16 @@ async function verifyCityWithWikidata(word) {
     if (!ids.length) return false;
     const entityUrl = new URL('https://www.wikidata.org/w/api.php');
     entityUrl.search = new URLSearchParams({
-      action: 'wbgetentities',
-      ids: ids.join('|'),
-      props: 'claims',
-      format: 'json',
-      origin: '*',
+      action: 'wbgetentities', ids: ids.join('|'), props: 'claims',
+      format: 'json', origin: '*',
     });
     const entityRes = await fetch(entityUrl);
-    if (!entityRes.ok) throw new Error(`Wikidata entities HTTP ${entityRes.status}`);
+    if (!entityRes.ok) throw new Error('Wikidata entities HTTP ' + entityRes.status);
     const entityData = await entityRes.json();
-
-    // Classi Wikidata: città, paese, villaggio, comune e insediamento umano.
+    // Classi di città, comuni, insediamenti e capitali presenti in Wikidata.
     const cityTypes = new Set([
-      'Q515', 'Q3957', 'Q532', 'Q15284', 'Q1637706',
-      'Q486972', 'Q200250', 'Q7930989'
+      'Q515', 'Q3957', 'Q532', 'Q15284', 'Q1637706', 'Q486972',
+      'Q200250', 'Q7930989', 'Q1549591', 'Q174844', 'Q5119'
     ]);
     return Object.values(entityData.entities || {}).some(entity =>
       (entity.claims?.P31 || []).some(claim =>
@@ -844,74 +834,26 @@ async function verifyWord(word, letter, category) {
   if (word.length < 2) return false;
   if (word[0].toLocaleUpperCase('it') !== letter) return false;
 
-  if (category === 'Città') {
-    // Wikidata è la fonte strutturata principale per distinguere una città
-    // da un semplice titolo o da una parola che le assomiglia.
-    if (await verifyCityWithWikidata(word)) return true;
-  }
-
-  if (category === 'Cose' || category === 'Nomi' || category === 'Città') {
-    try {
-      const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=10`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (data[1] && data[1].length > 0) {
-          const lower = word.toLocaleLowerCase('it');
-          const match = data[1].some(t => {
-            const title = t.toLocaleLowerCase('it');
-            if (title === lower) return true;
-            const escaped = lower.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\async function verifyWord(word, letter, category) {
-  if (word.length < 2) return false;
-  if (word[0].toUpperCase() !== letter) return false;
+  if (category === 'Città' && await verifyCityWithWikidata(word)) return true;
 
   if (category === 'Cose' || category === 'Nomi') {
     try {
-      const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=10`;
+      const url = 'https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=' + encodeURIComponent(word) + '&limit=10';
       const res = await fetch(url);
-      const data = await res.json();
-      if (data[1] && data[1].length > 0) {
-        const lower = word.toLowerCase();
-        const match = data[1].some(t => {
-          const title = t.toLowerCase();
-          if (title === lower) return true;
-          const escaped = lower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          return new RegExp(`\\b${escaped}\\b`, 'i').test(title);
-        });
+      if (res.ok) {
+        const data = await res.json();
+        const wanted = word.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('it');
+        const match = (data[1] || []).some(title =>
+          title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('it') === wanted
+        );
         if (match) return true;
       }
-    } catch (e) {
-      console.warn('Wikipedia error:', e);
+    } catch (error) {
+      console.warn('Wikipedia error:', error);
     }
   }
 
-  try {
-    const res = await fetch(WORKER_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ word, letter, category }),
-    });
-    const data = await res.json();
-    return data.valid === true;
-  } catch (e) {
-    console.warn('Worker error:', e);
-    return false;
-  }
-}
-
-');
-            return new RegExp(`\\\\b${escaped}\\\\b`, 'i').test(title);
-          });
-          if (match && category !== 'Città') return true;
-        }
-      }
-    } catch (e) {
-      console.warn('Wikipedia error:', e);
-    }
-  }
-
-  // Fallback semantico: se Wikidata/Wikipedia non confermano o non rispondono,
-  // Gemini può comunque riconoscere località recenti o con etichette alternative.
+  // Gemini resta il fallback per città non trovate in Wikidata e per le altre categorie.
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
@@ -924,12 +866,11 @@ async function verifyWord(word, letter, category) {
     }
     const data = await res.json();
     return data.valid === true;
-  } catch (e) {
-    console.warn('Worker error:', e);
+  } catch (error) {
+    console.warn('Worker error:', error);
     return false;
   }
 }
-
 // ------------------------------------------------------------
 // RENDER RISULTATI
 // ------------------------------------------------------------
