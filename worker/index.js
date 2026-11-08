@@ -1,5 +1,5 @@
 // ============================================================
-// Cloudflare Worker — proxy Gemini per verifica parole
+// Cloudflare Worker — proxy Gemini per verifica parole (v2)
 // ============================================================
 
 export default {
@@ -31,7 +31,7 @@ export default {
       });
     }
 
-    const { word, letter } = body || {};
+    const { word, letter, category } = body || {};
     if (!word || !letter) {
       return new Response(JSON.stringify({ error: 'Missing word or letter' }), {
         status: 400,
@@ -47,17 +47,16 @@ export default {
       });
     }
 
-    // Istruzioni di sistema: ruolo e formato di risposta
     const systemInstruction = `Sei un verificatore per il gioco italiano "Nomi Cose Città".
-Il tuo unico compito è determinare se una parola è valida per una data categoria e lettera iniziale.
-Una parola è valida se:
-- è una parola italiana esistente (nome comune, nome proprio, città, animale, mestiere, colore, film, cantante, sport o cibo);
-- inizia con la lettera indicata (indipendentemente da maiuscole/minuscole);
-- non è una parola inventata, un acronimo senza senso, o una frase.
+Il tuo unico compito è determinare se una parola è valida per una specifica categoria e lettera iniziale.
+Criteri di validità:
+- deve essere una parola italiana esistente e di senso compiuto;
+- deve appartenere alla categoria richiesta (es. "Città" = città italiana o estera riconosciuta; "Animali" = specie animale; "Mestieri" = professione; "Colori" = colore; "Film" = titolo di film; "Cantanti" = nome d'arte o cognome di cantante; "Sport" = disciplina sportiva; "Cibo" = alimento o piatto; "Cose" = oggetto o concetto concreto; "Nomi" = nome proprio di persona);
+- deve iniziare con la lettera indicata (indipendentemente da maiuscole/minuscole);
+- NON deve essere una parola inventata, un acronimo privo di senso, una frase, o una parola di una sola lettera.
 Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza punteggiatura aggiuntiva, senza altro testo.`;
 
-    // Messaggio utente: solo i dati della verifica
-    const userPrompt = `La parola "${word}" è valida per la lettera "${letter}"?`;
+    const userPrompt = `La parola "${word}" è valida come "${category || 'Cose'}" che inizia con la lettera "${letter}"?`;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
