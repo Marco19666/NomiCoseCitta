@@ -710,13 +710,14 @@ async function collectAndScore() {
     const entries = results[cat];
     const wordCounts = {};
     for (const e of entries) {
-      if (e.valid && e.word) {
+      // Le risposte non verificabili per un guasto tecnico ricevono punti provvisori.
+      if (e.valid !== false && e.word) {
         const key = e.word.toLowerCase();
         wordCounts[key] = (wordCounts[key] || 0) + 1;
       }
     }
     for (const e of entries) {
-      if (!e.valid || !e.word) { e.points = 0; continue; }
+      if (e.valid === false || !e.word) { e.points = 0; continue; }
       const key = e.word.toLowerCase();
       e.points = wordCounts[key] > 1 ? 5 : 10;
     }
@@ -739,7 +740,8 @@ async function collectAndScore() {
       const entry = results[cat].find(e => e.peerKey === firstKey);
       if (!entry) continue;
       if (entry.word) hasAnyWord = true;
-      if (entry.word && !entry.valid) { allValid = false; break; }
+      // Un controllo non riuscito non invalida la parola, ma non concede il bonus.
+      if (entry.word && entry.valid !== true) { allValid = false; break; }
     }
     if (allValid && hasAnyWord) {
       const entry = pointsByKey.get(firstKey);
@@ -824,7 +826,7 @@ async function verifyCityWithWikidata(word) {
     );
   } catch (error) {
     console.warn('Wikidata error (fallback Gemini):', error);
-    return false;
+    return null;
   }
 }
 
@@ -860,13 +862,13 @@ async function verifyWord(word, letter, category) {
     });
     if (!res.ok) {
       console.warn('Worker verification HTTP error:', res.status);
-      return false;
+      return null;
     }
     const data = await res.json();
-    return data.valid === true;
+    return data.valid === true ? true : data.valid === false ? false : null;
   } catch (error) {
     console.warn('Worker error:', error);
-    return false;
+    return null;
   }
 }
 // ------------------------------------------------------------
@@ -881,7 +883,7 @@ function renderResults(results) {
   const html = Object.entries(results).map(([cat, entries]) => {
     const rows = entries.map(e => {
       const cls = e.word && !e.valid ? 'word-dup' : '';
-      const status = e.word ? (e.valid ? '' : '(non valida)') : '(vuoto)';
+      const status = !e.word ? '(vuoto)' : e.valid === true ? '' : e.valid === false ? '(non valida)' : '(da verificare · punti provvisori)';
       const bonusTag = e.bonusFlag ? `<span class="bonus-tag">+${STOP_BONUS}</span>` : '';
       return `
         <div class="result-row">
