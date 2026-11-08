@@ -1,24 +1,22 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (Trystero via jsDelivr)
+// NOMI COSE CITTÀ — app.js (v3 con classifica, stop timer, WhatsApp)
 // ============================================================
 
-// Importazione stabile da jsDelivr (versione specifica per evitare breaking changes)
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
 
 // ------------------------------------------------------------
 // COSTANTI
 // ------------------------------------------------------------
 const APP_ID = 'nomi-cose-citta-v1';
-const ALPHABET = 'ABCDEFGILMNOPRSTUVXZ'; // 20 lettere (esclusi H,J,K,Q,W,Y)
+const ALPHABET = 'ABCDEFGILMNOPRSTUVXZ';
 const STORAGE_KEY_NAME = 'ncc_player_name';
 const FIXED_CATEGORIES = ['Cose', 'Nomi', 'Città'];
 const DEFAULT_EXTRA_CATEGORIES = ['Animali', 'Mestieri', 'Colori', 'Film', 'Cantanti', 'Sport', 'Cibo'];
-
-// URL del Worker Cloudflare (da aggiornare dopo il deploy)
 const WORKER_URL = 'https://muddy-grass-6726.chiccovision.workers.dev';
+const STOP_BONUS = 15;
 
 // ------------------------------------------------------------
-// STATO GLOBALE
+// STATO
 // ------------------------------------------------------------
 const state = {
   playerName: '',
@@ -26,27 +24,42 @@ const state = {
   roomCode: '',
   room: null,
   peers: new Map(),
+
   config: {
     extraCategories: [...DEFAULT_EXTRA_CATEGORIES],
     selectedExtras: [],
     timerSeconds: 60,
+    totalRounds: 5,
   },
+
   round: {
     number: 0,
     letter: '',
     seed: 0,
     timerSeconds: 0,
-    startTime: 0,
     active: false,
     previousLetter: '',
   },
+
   myAnswers: {},
   myReady: false,
+  myStopped: false,
+  myStopRemaining: null,
+
+  // Classifica accumulata: peerKey -> { name, total, rounds, bonusCount }
+  scores: new Map(),
+
+  // Stato dello stop timer nel round corrente (autorità host)
+  stop: {
+    firstPeerKey: null,
+    firstRemaining: null,
+  },
+
   timerInterval: null,
 };
 
 // ------------------------------------------------------------
-// RIFERIMENTI DOM
+// DOM
 // ------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -60,9 +73,10 @@ const dom = {
   btnJoinRoom: $('btnJoinRoom'),
   extraCategories: $('extraCategories'),
   timerOptions: $('timerOptions'),
+  roundsOptions: $('roundsOptions'),
   playerList: $('playerList'),
   playerCount: $('playerCount'),
-  btnShareSms: $('btnShareSms'),
+  btnShareWa: $('btnShareWa'),
   btnStartGame: $('btnStartGame'),
   hostHint: $('hostHint'),
   roomBadge: $('roomBadge'),
@@ -75,8 +89,12 @@ const dom = {
   roundSeed: $('roundSeed'),
   categoryInputs: $('categoryInputs'),
   btnDone: $('btnDone'),
+  btnStopTimer: $('btnStopTimer'),
   doneHint: $('doneHint'),
+  stopHint: $('stopHint'),
   gamePlayerList: $('gamePlayerList'),
+  resultsTitle: $('resultsTitle'),
+  standingsContent: $('standingsContent'),
   resultsContent: $('resultsContent'),
   btnNextRound: $('btnNextRound'),
   toast: $('toast'),
@@ -135,9 +153,6 @@ function escapeHtml(s) {
   }[c]));
 }
 
-// ------------------------------------------------------------
-// NOME GIOCATORE (localStorage, richiesto al primo click)
-// ------------------------------------------------------------
 function ensurePlayerName() {
   let name = localStorage.getItem(STORAGE_KEY_NAME);
   if (!name) {
@@ -153,14 +168,55 @@ function ensurePlayerName() {
 }
 
 // ------------------------------------------------------------
-// TRYSTERO — CONNESSIONE
+// CLASSIFICA
+// ------------------------------------------------------------
+function getOrCreateScore(peerKey, name) {
+  if (!state.scores.has(peerKey)) {
+    state.scores.set(peerKey, { name, total: 0, rounds: [], bonusCount: 0 });
+  } else if (name) {
+    state.scores.get(peerKey).name = name;
+  }
+  return state.scores.get(peerKey);
+}
+
+function addRoundScores(pointsByKey) {
+  // pointsByKey: Map<peerKey, { name, points, bonus }>
+  for (const [key, data] of pointsByKey) {
+    const s = getOrCreateScore(key, data.name);
+    s.total += data.points + (data.bonus || 0);
+    s.rounds.push({ points: data.points, bonus: data.bonus || 0 });
+    if (data.bonus) s.bonusCount += 1;
+  }
+}
+
+function renderStandings() {
+  const arr = [...state.scores.entries()]
+    .map(([key, data]) => ({ key, ...data }))
+    .sort((a, b) => b.total - a.total);
+
+  if (arr.length === 0) {
+    dom.standingsContent.innerHTML = '<p class="muted">Nessun punteggio ancora.</p>';
+    return;
+  }
+
+  dom.standingsContent.innerHTML = `<div class="standings">${arr.map((s, i) => `
+    <div class="standing-row ${i === 0 ? 'first' : ''}">
+      <span class="standing-pos">${i + 1}°</span>
+      <span class="standing-name">${escapeHtml(s.name)}</span>
+      <span class="standing-points">${s.total} pt</span>
+      ${s.bonusCount > 0 ? `<span class="standing-bonus">+${s.bonusCount * STOP_BONUS} bonus</span>` : ''}
+    </div>
+  `).join('')}</div>`;
+}
+
+// ------------------------------------------------------------
+// TRYSTERO
 // ------------------------------------------------------------
 function initRoom(isHost, roomCode) {
   state.isHost = isHost;
   state.roomCode = roomCode;
 
-  const config = { appId: APP_ID };
-  const room = joinRoom(config, roomCode);
+  const room = joinRoom({ appId: APP_ID }, roomCode);
   state.room = room;
 
   dom.roomBadge.hidden = false;
@@ -171,11 +227,11 @@ function initRoom(isHost, roomCode) {
 
   if (isHost) {
     dom.btnStartGame.disabled = false;
-    dom.btnShareSms.hidden = false;
+    dom.btnShareWa.hidden = false;
     dom.hostHint.hidden = true;
   } else {
     dom.btnStartGame.disabled = true;
-    dom.btnShareSms.hidden = true;
+    dom.btnShareWa.hidden = true;
     dom.hostHint.hidden = false;
   }
 
@@ -184,6 +240,7 @@ function initRoom(isHost, roomCode) {
   const [sendRoundStart, onRoundStart] = room.makeAction('round-start');
   const [sendResults, onResults] = room.makeAction('results');
   const [sendConfig, onConfig] = room.makeAction('config');
+  const [sendStop, onStop] = room.makeAction('stop');
 
   state.send = {
     presence: sendPresence,
@@ -191,6 +248,7 @@ function initRoom(isHost, roomCode) {
     roundStart: sendRoundStart,
     results: sendResults,
     config: sendConfig,
+    stop: sendStop,
   };
 
   function announcePresence() {
@@ -202,6 +260,7 @@ function initRoom(isHost, roomCode) {
       name: data.name,
       isHost: data.isHost,
       ready: false,
+      stopped: false,
       answers: null,
     });
     renderPlayers();
@@ -219,13 +278,11 @@ function initRoom(isHost, roomCode) {
   });
 
   room.onPeerJoin(peerId => {
-    console.log('Peer joined:', peerId);
     dom.connDot.classList.add('online');
     setTimeout(announcePresence, 300);
   });
 
   room.onPeerLeave(peerId => {
-    console.log('Peer left:', peerId);
     state.peers.delete(peerId);
     renderPlayers();
     if (state.peers.size === 0) {
@@ -251,15 +308,37 @@ function initRoom(isHost, roomCode) {
 
   onResults((data) => {
     if (state.isHost) return;
+    // Salva i punteggi ricevuti e aggiorna classifica
+    if (data.scores) {
+      state.scores = new Map(data.scores);
+    }
+    renderStandings();
     renderResults(data.results);
     showScreen('results');
+    dom.btnNextRound.hidden = true;
+    dom.resultsTitle.textContent = data.isLastRound ? 'Classifica finale' : 'Risultati manche';
+  });
+
+  onStop((data, peerId) => {
+    if (!state.isHost) return;
+    const peer = state.peers.get(peerId);
+    if (peer) {
+      peer.stopped = true;
+      peer.stopRemaining = data.remaining;
+      // Primo stopper con tutti i campi compilati
+      if (!state.stop.firstPeerKey && data.allFilled) {
+        state.stop.firstPeerKey = peerId;
+        state.stop.firstRemaining = data.remaining;
+      }
+    }
+    renderPlayers();
   });
 
   setTimeout(announcePresence, 500);
 }
 
 // ------------------------------------------------------------
-// LOBBY — AZIONI
+// LOBBY
 // ------------------------------------------------------------
 dom.btnCreateRoom.addEventListener('click', () => {
   ensurePlayerName();
@@ -280,10 +359,10 @@ dom.btnJoinRoom.addEventListener('click', () => {
   initRoom(false, code);
 });
 
-dom.btnShareSms.addEventListener('click', () => {
+dom.btnShareWa.addEventListener('click', () => {
   const url = `${window.location.origin}${window.location.pathname}?room=${state.roomCode}`;
-  const body = encodeURIComponent(`Gioca a Nomi Cose Città! Clicca qui: ${url}`);
-  window.location.href = `sms:?&body=${body}`;
+  const text = encodeURIComponent(`Gioca a Nomi Cose Città! Clicca qui: ${url}`);
+  window.open(`https://wa.me/?text=${text}`, '_blank');
 });
 
 dom.extraCategories.addEventListener('change', () => {
@@ -301,6 +380,13 @@ dom.timerOptions.addEventListener('change', () => {
   broadcastConfig();
 });
 
+dom.roundsOptions.addEventListener('change', () => {
+  if (!state.isHost) return;
+  const selected = dom.roundsOptions.querySelector('.chip-check:checked');
+  state.config.totalRounds = parseInt(selected.value, 10);
+  broadcastConfig();
+});
+
 function broadcastConfig() {
   if (state.isHost && state.send) {
     state.send.config({ config: state.config });
@@ -314,6 +400,9 @@ function applyConfigToUI() {
   for (const rb of dom.timerOptions.querySelectorAll('.chip-check')) {
     rb.checked = parseInt(rb.value, 10) === state.config.timerSeconds;
   }
+  for (const rb of dom.roundsOptions.querySelectorAll('.chip-check')) {
+    rb.checked = parseInt(rb.value, 10) === state.config.totalRounds;
+  }
 }
 
 // ------------------------------------------------------------
@@ -324,6 +413,7 @@ function renderPlayers() {
     name: state.playerName + ' (tu)',
     isHost: state.isHost,
     ready: state.myReady,
+    stopped: state.myStopped,
   }];
 
   for (const [peerId, peer] of state.peers) {
@@ -331,6 +421,7 @@ function renderPlayers() {
       name: peer.name,
       isHost: peer.isHost,
       ready: peer.ready,
+      stopped: peer.stopped || false,
     });
   }
 
@@ -338,8 +429,8 @@ function renderPlayers() {
   dom.playerList.innerHTML = list.map(p => `
     <li>
       <span class="player-name">${escapeHtml(p.name)}</span>
-      <span class="player-tag ${p.isHost ? 'host' : ''} ${p.ready ? 'ready' : ''}">
-        ${p.isHost ? 'Host' : (p.ready ? 'Pronto' : 'In attesa')}
+      <span class="player-tag ${p.isHost ? 'host' : ''} ${p.ready ? 'ready' : ''} ${p.stopped ? 'stopped' : ''}">
+        ${p.isHost ? 'Host' : (p.stopped ? 'Stop' : (p.ready ? 'Pronto' : 'In attesa'))}
       </span>
     </li>
   `).join('');
@@ -348,8 +439,8 @@ function renderPlayers() {
     dom.gamePlayerList.innerHTML = list.map(p => `
       <li>
         <span class="player-name">${escapeHtml(p.name)}</span>
-        <span class="player-tag ${p.ready ? 'ready' : ''}">
-          ${p.ready ? 'Pronto' : 'In gioco'}
+        <span class="player-tag ${p.stopped ? 'stopped' : ''} ${p.ready ? 'ready' : ''}">
+          ${p.stopped ? 'Stop' : (p.ready ? 'Pronto' : 'In gioco')}
         </span>
       </li>
     `).join('');
@@ -357,9 +448,14 @@ function renderPlayers() {
 }
 
 // ------------------------------------------------------------
-// AVVIO PARTITA (host)
+// AVVIO MANCHE (host)
 // ------------------------------------------------------------
 dom.btnStartGame.addEventListener('click', () => {
+  if (!state.isHost) return;
+  startNewRound();
+});
+
+function startNewRound() {
   if (!state.isHost) return;
 
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
@@ -369,9 +465,18 @@ dom.btnStartGame.addEventListener('click', () => {
   state.round.seed = seed;
   state.round.letter = letter;
   state.round.timerSeconds = state.config.timerSeconds;
-  state.round.startTime = Date.now();
   state.round.active = true;
   state.round.previousLetter = letter;
+
+  // Reset stop
+  state.stop = { firstPeerKey: null, firstRemaining: null };
+  state.myStopped = false;
+  state.myStopRemaining = null;
+  for (const peer of state.peers.values()) {
+    peer.stopped = false;
+    peer.ready = false;
+    peer.answers = null;
+  }
 
   const activeCategories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
 
@@ -389,16 +494,18 @@ dom.btnStartGame.addEventListener('click', () => {
 
   startTimer(state.round.timerSeconds);
   showScreen('game');
-});
+}
 
 function startRoundLocal(data) {
   state.round.number = data.roundNumber;
   state.round.letter = data.letter;
   state.round.seed = data.seed;
   state.round.timerSeconds = data.timerSeconds;
-  state.round.startTime = Date.now();
   state.round.active = true;
   state.round.previousLetter = data.letter;
+
+  state.myStopped = false;
+  state.myStopRemaining = null;
 
   prepareGameUI(data.letter, data.roundNumber, data.seed, data.categories);
   startTimer(data.timerSeconds);
@@ -407,9 +514,9 @@ function startRoundLocal(data) {
 
 function prepareGameUI(letter, roundNumber, seed, categories) {
   dom.roundLetter.textContent = letter;
-  dom.roundNumber.textContent = `Round ${roundNumber}`;
+  dom.roundNumber.textContent = `Manche ${roundNumber} di ${state.config.totalRounds}`;
   dom.roundSeed.textContent = `seed: ${seed}`;
-  dom.roundTimerBox.classList.remove('warning', 'danger', 'hidden-timer');
+  dom.roundTimerBox.classList.remove('warning', 'danger', 'hidden-timer', 'stopped');
 
   dom.categoryInputs.innerHTML = categories.map(cat => `
     <div class="cat-row" data-cat="${escapeHtml(cat)}">
@@ -424,8 +531,11 @@ function prepareGameUI(letter, roundNumber, seed, categories) {
 
   state.myAnswers = {};
   state.myReady = false;
+  state.myStopped = false;
   dom.btnDone.disabled = false;
+  dom.btnStopTimer.disabled = false;
   dom.doneHint.hidden = true;
+  dom.stopHint.hidden = true;
 
   for (const input of dom.categoryInputs.querySelectorAll('input')) {
     input.addEventListener('input', (e) => {
@@ -446,21 +556,23 @@ function startTimer(seconds) {
   }
 
   let remaining = seconds;
+  state.remainingSeconds = remaining;
   dom.roundTimer.textContent = formatTime(remaining);
 
   state.timerInterval = setInterval(() => {
-    remaining -= 1;
-    dom.roundTimer.textContent = formatTime(remaining);
-
-    if (remaining <= 10 && remaining > 0) {
-      dom.roundTimerBox.classList.add('warning');
+    state.remainingSeconds -= 1;
+    if (!state.myStopped) {
+      dom.roundTimer.textContent = formatTime(Math.max(0, state.remainingSeconds));
     }
-    if (remaining <= 5) {
+
+    const rem = state.remainingSeconds;
+    if (rem <= 10 && rem > 0) dom.roundTimerBox.classList.add('warning');
+    if (rem <= 5) {
       dom.roundTimerBox.classList.remove('warning');
       dom.roundTimerBox.classList.add('danger');
     }
 
-    if (remaining <= 0) {
+    if (rem <= 0) {
       stopTimer();
       onRoundTimeUp();
     }
@@ -481,7 +593,58 @@ function stopTimer() {
 }
 
 // ------------------------------------------------------------
-// FINE ROUND
+// HO FINITO!
+// ------------------------------------------------------------
+dom.btnDone.addEventListener('click', () => {
+  if (state.myReady) return;
+  state.myReady = true;
+  dom.btnDone.disabled = true;
+  dom.doneHint.hidden = false;
+  renderPlayers();
+
+  if (!state.isHost && state.send) {
+    state.send.answers({ answers: state.myAnswers });
+  }
+});
+
+// ------------------------------------------------------------
+// STOP TIMER
+// ------------------------------------------------------------
+dom.btnStopTimer.addEventListener('click', () => {
+  if (state.myStopped) return;
+
+  // Controlla che tutti i campi siano compilati
+  const categories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
+  const allFilled = categories.every(cat => (state.myAnswers[cat] || '').length > 0);
+
+  state.myStopped = true;
+  state.myStopRemaining = state.remainingSeconds;
+  dom.btnStopTimer.disabled = true;
+  dom.stopHint.hidden = false;
+  dom.roundTimerBox.classList.add('stopped');
+  dom.roundTimer.textContent = formatTime(state.remainingSeconds);
+
+  renderPlayers();
+
+  if (!state.isHost && state.send) {
+    state.send.stop({ remaining: state.remainingSeconds, allFilled });
+  } else if (state.isHost) {
+    // L'host registra il proprio stop localmente
+    if (allFilled && !state.stop.firstPeerKey) {
+      state.stop.firstPeerKey = 'self';
+      state.stop.firstRemaining = state.remainingSeconds;
+    }
+  }
+
+  if (!allFilled) {
+    showToast('Stop registrato, ma non hai compilato tutti i campi: nessun bonus.');
+  } else {
+    showToast('Stop registrato! Bonus valido solo se tutte le parole sono corrette.');
+  }
+});
+
+// ------------------------------------------------------------
+// FINE MANCHE
 // ------------------------------------------------------------
 function onRoundTimeUp() {
   state.round.active = false;
@@ -497,49 +660,40 @@ function onRoundTimeUp() {
   }
 }
 
-dom.btnDone.addEventListener('click', () => {
-  if (state.myReady) return;
-  state.myReady = true;
-  dom.btnDone.disabled = true;
-  dom.doneHint.hidden = false;
-  renderPlayers();
-
-  if (!state.isHost && state.send) {
-    state.send.answers({ answers: state.myAnswers });
-  }
-});
-
 // ------------------------------------------------------------
 // SCORING (host)
 // ------------------------------------------------------------
 async function collectAndScore() {
   const allAnswers = new Map();
   allAnswers.set('self', { name: state.playerName, answers: state.myAnswers });
-
   for (const [peerId, peer] of state.peers) {
     allAnswers.set(peerId, { name: peer.name, answers: peer.answers || {} });
   }
 
   const categories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
   const results = {};
+  const pointsByKey = new Map();
 
+  // Verifica parole per categoria
   for (const cat of categories) {
     results[cat] = [];
-    for (const [peerId, data] of allAnswers) {
+    for (const [peerKey, data] of allAnswers) {
       const word = (data.answers[cat] || '').trim();
       let valid = false;
-      if (word) {
-        valid = await verifyWord(word, state.round.letter);
-      }
+      if (word) valid = await verifyWord(word, state.round.letter);
       results[cat].push({
+        peerKey,
         playerName: data.name,
-        word: word,
-        valid: valid,
+        word,
+        valid,
         points: 0,
+        bonus: 0,
+        bonusFlag: false,
       });
     }
   }
 
+  // Calcola punti base: 10 se valida e unica, 5 se valida ma duplicata
   for (const cat of categories) {
     const entries = results[cat];
     const wordCounts = {};
@@ -556,12 +710,65 @@ async function collectAndScore() {
     }
   }
 
-  if (state.send) {
-    state.send.results({ results });
+  // Accumula punti base per giocatore
+  for (const cat of categories) {
+    for (const e of results[cat]) {
+      if (!pointsByKey.has(e.peerKey)) {
+        pointsByKey.set(e.peerKey, { name: e.playerName, points: 0, bonus: 0 });
+      }
+      pointsByKey.get(e.peerKey).points += e.points;
+    }
   }
 
-  renderResults(results);
+  // Bonus Stop timer: assegnato al primo stopper con tutti i campi compilati E tutte le parole valide
+  if (state.stop.firstPeerKey) {
+    const firstKey = state.stop.firstPeerKey;
+    // Controlla che tutte le parole di quel giocatore siano valide
+    let allValid = true;
+    let hasAnyWord = false;
+    for (const cat of categories) {
+      const entry = results[cat].find(e => e.peerKey === firstKey);
+      if (!entry) continue;
+      if (entry.word) hasAnyWord = true;
+      if (entry.word && !entry.valid) { allValid = false; break; }
+    }
+    if (allValid && hasAnyWord) {
+      const entry = pointsByKey.get(firstKey);
+      if (entry) {
+        entry.bonus = STOP_BONUS;
+        // Marca nel dettaglio
+        for (const cat of categories) {
+          const e = results[cat].find(x => x.peerKey === firstKey);
+          if (e && e.word) e.bonusFlag = true;
+        }
+      }
+    }
+  }
+
+  // Aggiorna classifica
+  addRoundScores(pointsByKey);
+
+  const isLastRound = state.round.number >= state.config.totalRounds;
+
+  // Invia ai client
+  if (state.send) {
+    state.send.results({
+      results,
+      scores: [...state.scores.entries()],
+      isLastRound,
+    });
+  }
+
+  // Mostra localmente
+  renderStandings();
+  renderResults(results, pointsByKey);
   showScreen('results');
+  dom.resultsTitle.textContent = isLastRound ? 'Classifica finale' : 'Risultati manche';
+  dom.btnNextRound.hidden = !state.isHost || isLastRound;
+
+  if (isLastRound) {
+    showToast('Partita terminata!');
+  }
 }
 
 // ------------------------------------------------------------
@@ -587,11 +794,7 @@ async function verifyWord(word, letter) {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        word: word,
-        letter: letter,
-        prompt: `La parola italiana "${word}" è una parola valida che inizia con la lettera "${letter}"? Rispondi solo "sì" o "no".`,
-      }),
+      body: JSON.stringify({ word, letter }),
     });
     const data = await res.json();
     return data.valid === true;
@@ -604,14 +807,15 @@ async function verifyWord(word, letter) {
 // ------------------------------------------------------------
 // RENDER RISULTATI
 // ------------------------------------------------------------
-function renderResults(results) {
+function renderResults(results, pointsByKey) {
   const html = Object.entries(results).map(([cat, entries]) => {
     const rows = entries.map(e => {
       const cls = e.word && !e.valid ? 'word-dup' : '';
       const status = e.word ? (e.valid ? '' : '(non valida)') : '(vuoto)';
+      const bonusTag = e.bonusFlag ? `<span class="bonus-tag">+${STOP_BONUS}</span>` : '';
       return `
         <div class="result-row">
-          <span>${escapeHtml(e.playerName)}: <span class="${cls}">${escapeHtml(e.word || '—')}</span> ${status}</span>
+          <span>${escapeHtml(e.playerName)}: <span class="${cls}">${escapeHtml(e.word || '—')}</span> ${status}${bonusTag}</span>
           <span class="points">${e.points} pt</span>
         </div>
       `;
@@ -625,15 +829,23 @@ function renderResults(results) {
   }).join('');
 
   dom.resultsContent.innerHTML = html;
-  dom.btnNextRound.hidden = !state.isHost;
-  dom.btnNextRound.onclick = () => {
-    if (!state.isHost) return;
-    state.myReady = false;
-    state.myAnswers = {};
-    renderPlayers();
-    showScreen('lobby');
-  };
 }
+
+// ------------------------------------------------------------
+// PROSSIMA MANCHE
+// ------------------------------------------------------------
+dom.btnNextRound.addEventListener('click', () => {
+  if (!state.isHost) return;
+  if (state.round.number >= state.config.totalRounds) {
+    showToast('Partita già terminata.');
+    return;
+  }
+  state.myReady = false;
+  state.myAnswers = {};
+  state.myStopped = false;
+  renderPlayers();
+  startNewRound();
+});
 
 // ------------------------------------------------------------
 // BOOT
