@@ -1,5 +1,5 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (v5 con correzioni Stop/verifica/timing)
+// NOMI COSE CITTÀ — app.js (v6 con Opzione A)
 // ============================================================
 
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
@@ -41,16 +41,12 @@ const state = {
 
   myAnswers: {},
   myReady: false,
-  myStopped: false,
-  myStopRemaining: null,
   remainingSeconds: 0,
 
   scores: new Map(),
 
-  stop: {
-    firstPeerKey: null,
-    firstRemaining: null,
-  },
+  // Primo giocatore che ha premuto "Ho finito!" con tutti i campi compilati
+  firstDone: null, // { name, allFilled }
 
   timerInterval: null,
 };
@@ -87,9 +83,7 @@ const dom = {
   roundSeed: $('roundSeed'),
   categoryInputs: $('categoryInputs'),
   btnDone: $('btnDone'),
-  btnStopTimer: $('btnStopTimer'),
   doneHint: $('doneHint'),
-  stopHint: $('stopHint'),
   gamePlayerList: $('gamePlayerList'),
   resultsTitle: $('resultsTitle'),
   standingsContent: $('standingsContent'),
@@ -235,7 +229,7 @@ function initRoom(isHost, roomCode) {
   const [sendRoundStart, onRoundStart] = room.makeAction('round-start');
   const [sendResults, onResults] = room.makeAction('results');
   const [sendConfig, onConfig] = room.makeAction('config');
-  const [sendStop, onStop] = room.makeAction('stop');
+  const [sendDone, onDone] = room.makeAction('done');
 
   state.send = {
     presence: sendPresence,
@@ -243,7 +237,7 @@ function initRoom(isHost, roomCode) {
     roundStart: sendRoundStart,
     results: sendResults,
     config: sendConfig,
-    stop: sendStop,
+    done: sendDone,
   };
 
   function announcePresence() {
@@ -255,7 +249,6 @@ function initRoom(isHost, roomCode) {
       name: data.name,
       isHost: data.isHost,
       ready: false,
-      stopped: false,
       answers: null,
     });
     renderPlayers();
@@ -293,12 +286,41 @@ function initRoom(isHost, roomCode) {
     }
   });
 
-  onAnswers((data, peerId) => {
+  // Risposte: identifica per nome (gli ID di Trystero possono non coincidere)
+  onAnswers((data) => {
     if (!state.isHost) return;
-    const peer = state.peers.get(peerId);
-    if (peer) {
-      peer.answers = data.answers || {};
-      peer.ready = true;
+    const name = data.name;
+    if (name === state.playerName) {
+      state.myAnswers = data.answers || {};
+      return;
+    }
+    for (const peer of state.peers.values()) {
+      if (peer.name === name) {
+        peer.answers = data.answers || {};
+        peer.ready = true;
+        break;
+      }
+    }
+    renderPlayers();
+  });
+
+  // "Ho finito!" (nuovo: gestisce anche il bonus)
+  onDone((data) => {
+    if (!state.isHost) return;
+    const name = data.name;
+    if (!state.firstDone && data.allFilled) {
+      state.firstDone = { name, allFilled: true };
+    }
+    // Aggiorna lo stato "pronto" del peer
+    if (name === state.playerName) {
+      state.myReady = true;
+    } else {
+      for (const peer of state.peers.values()) {
+        if (peer.name === name) {
+          peer.ready = true;
+          break;
+        }
+      }
     }
     renderPlayers();
   });
@@ -326,20 +348,6 @@ function initRoom(isHost, roomCode) {
     if (dom.resultsTitle) {
       dom.resultsTitle.textContent = data.isLastRound ? 'Classifica finale' : 'Risultati manche';
     }
-  });
-
-  onStop((data, peerId) => {
-    if (!state.isHost) return;
-    const peer = state.peers.get(peerId);
-    if (peer) {
-      peer.stopped = true;
-      peer.stopRemaining = data.remaining;
-      if (!state.stop.firstPeerKey && data.allFilled) {
-        state.stop.firstPeerKey = peerId;
-        state.stop.firstRemaining = data.remaining;
-      }
-    }
-    renderPlayers();
   });
 
   setTimeout(announcePresence, 500);
@@ -429,7 +437,6 @@ function renderPlayers() {
     name: state.playerName + ' (tu)',
     isHost: state.isHost,
     ready: state.myReady,
-    stopped: state.myStopped,
   }];
 
   for (const [peerId, peer] of state.peers) {
@@ -437,7 +444,6 @@ function renderPlayers() {
       name: peer.name,
       isHost: peer.isHost,
       ready: peer.ready,
-      stopped: peer.stopped || false,
     });
   }
 
@@ -445,8 +451,8 @@ function renderPlayers() {
   dom.playerList.innerHTML = list.map(p => `
     <li>
       <span class="player-name">${escapeHtml(p.name)}</span>
-      <span class="player-tag ${p.isHost ? 'host' : ''} ${p.ready ? 'ready' : ''} ${p.stopped ? 'stopped' : ''}">
-        ${p.isHost ? 'Host' : (p.stopped ? 'Stop' : (p.ready ? 'Pronto' : 'In attesa'))}
+      <span class="player-tag ${p.isHost ? 'host' : ''} ${p.ready ? 'ready' : ''}">
+        ${p.isHost ? 'Host' : (p.ready ? 'Pronto' : 'In attesa')}
       </span>
     </li>
   `).join('');
@@ -455,8 +461,8 @@ function renderPlayers() {
     dom.gamePlayerList.innerHTML = list.map(p => `
       <li>
         <span class="player-name">${escapeHtml(p.name)}</span>
-        <span class="player-tag ${p.stopped ? 'stopped' : ''} ${p.ready ? 'ready' : ''}">
-          ${p.stopped ? 'Stop' : (p.ready ? 'Pronto' : 'In gioco')}
+        <span class="player-tag ${p.ready ? 'ready' : ''}">
+          ${p.ready ? 'Pronto' : 'In gioco'}
         </span>
       </li>
     `).join('');
@@ -484,11 +490,9 @@ function startNewRound() {
   state.round.active = true;
   state.round.previousLetter = letter;
 
-  state.stop = { firstPeerKey: null, firstRemaining: null };
-  state.myStopped = false;
-  state.myStopRemaining = null;
+  state.firstDone = null;
+  state.myReady = false;
   for (const peer of state.peers.values()) {
-    peer.stopped = false;
     peer.ready = false;
     peer.answers = null;
   }
@@ -520,8 +524,7 @@ function startRoundLocal(data) {
   state.round.active = true;
   state.round.previousLetter = data.letter;
 
-  state.myStopped = false;
-  state.myStopRemaining = null;
+  state.myReady = false;
 
   prepareGameUI(data.letter, data.roundNumber, data.seed, data.categories);
   startTimer(data.timerSeconds);
@@ -537,7 +540,7 @@ function prepareGameUI(letter, roundNumber, seed, categories) {
   dom.roundLetter.textContent = letter;
   dom.roundNumber.textContent = `Manche ${roundNumber} di ${state.config.totalRounds}`;
   dom.roundSeed.textContent = `seed: ${seed}`;
-  dom.roundTimerBox.classList.remove('warning', 'danger', 'hidden-timer', 'stopped');
+  dom.roundTimerBox.classList.remove('warning', 'danger', 'hidden-timer');
 
   dom.categoryInputs.innerHTML = categories.map(cat => `
     <div class="cat-row" data-cat="${escapeHtml(cat)}">
@@ -552,11 +555,8 @@ function prepareGameUI(letter, roundNumber, seed, categories) {
 
   state.myAnswers = {};
   state.myReady = false;
-  state.myStopped = false;
   dom.btnDone.disabled = false;
-  dom.btnStopTimer.disabled = false;
   dom.doneHint.hidden = true;
-  dom.stopHint.hidden = true;
 
   for (const input of dom.categoryInputs.querySelectorAll('input')) {
     input.addEventListener('input', (e) => {
@@ -582,9 +582,7 @@ function startTimer(seconds) {
 
   state.timerInterval = setInterval(() => {
     state.remainingSeconds -= 1;
-    if (!state.myStopped) {
-      dom.roundTimer.textContent = formatTime(Math.max(0, state.remainingSeconds));
-    }
+    dom.roundTimer.textContent = formatTime(Math.max(0, state.remainingSeconds));
 
     const rem = state.remainingSeconds;
     if (rem <= 10 && rem > 0) dom.roundTimerBox.classList.add('warning');
@@ -614,7 +612,7 @@ function stopTimer() {
 }
 
 // ------------------------------------------------------------
-// HO FINITO!
+// HO FINITO! (unico bottone: invia risposte, ferma timer locale, concorre al bonus)
 // ------------------------------------------------------------
 dom.btnDone.addEventListener('click', () => {
   if (state.myReady) return;
@@ -623,44 +621,27 @@ dom.btnDone.addEventListener('click', () => {
   dom.doneHint.hidden = false;
   renderPlayers();
 
-  if (!state.isHost && state.send) {
-    state.send.answers({ answers: state.myAnswers });
-  }
-});
-
-// ------------------------------------------------------------
-// STOP TIMER
-// ------------------------------------------------------------
-dom.btnStopTimer.addEventListener('click', () => {
-  if (state.myStopped) return;
-
   const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
   const allFilled = categories.every(cat => (state.myAnswers[cat] || '').length > 0);
 
-  state.myStopped = true;
-  state.myStopRemaining = state.remainingSeconds;
-  dom.btnStopTimer.disabled = true;
-  dom.stopHint.hidden = false;
-  dom.roundTimerBox.classList.add('stopped');
+  // Ferma il timer locale
+  stopTimer();
   dom.roundTimer.textContent = formatTime(state.remainingSeconds);
 
-  renderPlayers();
-
-  // Invia SEMPRE le risposte all'host, anche se il timer è fermato localmente
+  // Invia risposte e stato "finito" all'host (o registra localmente se host)
   if (!state.isHost && state.send) {
-    state.send.answers({ answers: state.myAnswers });
-    state.send.stop({ remaining: state.remainingSeconds, allFilled });
+    state.send.answers({ answers: state.myAnswers, name: state.playerName });
+    state.send.done({ name: state.playerName, allFilled });
   } else if (state.isHost) {
-    if (allFilled && !state.stop.firstPeerKey) {
-      state.stop.firstPeerKey = 'self';
-      state.stop.firstRemaining = state.remainingSeconds;
+    if (!state.firstDone && allFilled) {
+      state.firstDone = { name: state.playerName, allFilled: true };
     }
   }
 
   if (!allFilled) {
-    showToast('Stop registrato, ma non hai compilato tutti i campi: nessun bonus.');
+    showToast('Hai finito, ma non hai compilato tutti i campi: nessun bonus.');
   } else {
-    showToast('Stop registrato! Bonus valido solo se tutte le parole sono corrette.');
+    showToast('Hai finito! Bonus valido solo se tutte le parole sono corrette.');
   }
 });
 
@@ -675,7 +656,7 @@ function onRoundTimeUp() {
     collectAndScore();
   } else {
     if (state.send) {
-      state.send.answers({ answers: state.myAnswers });
+      state.send.answers({ answers: state.myAnswers, name: state.playerName });
     }
     showToast('Tempo scaduto! In attesa dei risultati...');
   }
@@ -689,9 +670,9 @@ async function collectAndScore() {
   await new Promise(r => setTimeout(r, 1500));
 
   const allAnswers = new Map();
-  allAnswers.set('self', { name: state.playerName, answers: state.myAnswers });
-  for (const [peerId, peer] of state.peers) {
-    allAnswers.set(peerId, { name: peer.name, answers: peer.answers || {} });
+  allAnswers.set(state.playerName, { name: state.playerName, answers: state.myAnswers });
+  for (const peer of state.peers.values()) {
+    allAnswers.set(peer.name, { name: peer.name, answers: peer.answers || {} });
   }
 
   const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
@@ -703,7 +684,7 @@ async function collectAndScore() {
     for (const [peerKey, data] of allAnswers) {
       const word = (data.answers[cat] || '').trim();
       let valid = false;
-      if (word) valid = await verifyWord(word, state.round.letter);
+      if (word) valid = await verifyWord(word, state.round.letter, cat);
       results[cat].push({
         peerKey,
         playerName: data.name,
@@ -741,8 +722,10 @@ async function collectAndScore() {
     }
   }
 
-  if (state.stop.firstPeerKey) {
-    const firstKey = state.stop.firstPeerKey;
+  // Bonus: assegnato al primo che ha premuto "Ho finito!" con tutti i campi
+  // compilati E tutte le parole valide
+  if (state.firstDone && state.firstDone.allFilled) {
+    const firstKey = state.firstDone.name;
     let allValid = true;
     let hasAnyWord = false;
     for (const cat of categories) {
@@ -787,42 +770,39 @@ async function collectAndScore() {
 }
 
 // ------------------------------------------------------------
-// VERIFICA PAROLE
+// VERIFICA PAROLE (con categoria)
 // ------------------------------------------------------------
-async function verifyWord(word, letter) {
-  // Parole troppo corte non sono valide (una singola lettera non è una parola)
+async function verifyWord(word, letter, category) {
   if (word.length < 2) return false;
-
-  // Deve iniziare con la lettera del round
   if (word[0].toUpperCase() !== letter) return false;
 
-  // 1. Wikipedia (priorità)
-  try {
-    const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=10`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data[1] && data[1].length > 0) {
-      const lower = word.toLowerCase();
-      // Corrispondenza esatta o parola intera nel titolo (non sottostringa)
-      const match = data[1].some(t => {
-        const title = t.toLowerCase();
-        if (title === lower) return true;
-        const escaped = lower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`\\b${escaped}\\b`, 'i');
-        return regex.test(title);
-      });
-      if (match) return true;
+  // Wikipedia solo per Cose e Nomi
+  if (category === 'Cose' || category === 'Nomi') {
+    try {
+      const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=10`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data[1] && data[1].length > 0) {
+        const lower = word.toLowerCase();
+        const match = data[1].some(t => {
+          const title = t.toLowerCase();
+          if (title === lower) return true;
+          const escaped = lower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return new RegExp(`\\b${escaped}\\b`, 'i').test(title);
+        });
+        if (match) return true;
+      }
+    } catch (e) {
+      console.warn('Wikipedia error:', e);
     }
-  } catch (e) {
-    console.warn('Wikipedia error:', e);
   }
 
-  // 2. Fallback Gemini via Worker
+  // Gemini per tutte le categorie (e fallback per Cose/Nomi)
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ word, letter }),
+      body: JSON.stringify({ word, letter, category }),
     });
     const data = await res.json();
     return data.valid === true;
@@ -875,7 +855,6 @@ dom.btnNextRound.addEventListener('click', () => {
   }
   state.myReady = false;
   state.myAnswers = {};
-  state.myStopped = false;
   renderPlayers();
   startNewRound();
 });
