@@ -297,9 +297,7 @@ function initRoom(isHost, roomCode) {
       return;
     }
     peer.answers = data.answers && typeof data.answers === 'object' ? data.answers : {};
-    peer.ready = true;
     renderPlayers();
-    checkAllDone();
   });
 
   onDone((data, peerId) => {
