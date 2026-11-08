@@ -1,5 +1,5 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (v4 con protezioni difensive)
+// NOMI COSE CITTÀ — app.js (v5 con correzioni Stop/verifica/timing)
 // ============================================================
 
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
@@ -11,7 +11,6 @@ const APP_ID = 'nomi-cose-citta-v1';
 const ALPHABET = 'ABCDEFGILMNOPRSTUVXZ';
 const STORAGE_KEY_NAME = 'ncc_player_name';
 const FIXED_CATEGORIES = ['Cose', 'Nomi', 'Città'];
-const DEFAULT_EXTRA_CATEGORIES = ['Animali', 'Mestieri', 'Colori', 'Film', 'Cantanti', 'Sport', 'Cibo'];
 const WORKER_URL = 'https://muddy-grass-6726.chiccovision.workers.dev';
 const STOP_BONUS = 15;
 
@@ -154,15 +153,9 @@ function escapeHtml(s) {
 
 function ensurePlayerName() {
   let name = '';
-  if (dom.inputPlayerName) {
-    name = dom.inputPlayerName.value.trim();
-  }
-  if (!name) {
-    name = localStorage.getItem(STORAGE_KEY_NAME) || '';
-  }
-  if (!name) {
-    name = 'Giocatore ' + Math.floor(Math.random() * 900 + 100);
-  }
+  if (dom.inputPlayerName) name = dom.inputPlayerName.value.trim();
+  if (!name) name = localStorage.getItem(STORAGE_KEY_NAME) || '';
+  if (!name) name = 'Giocatore ' + Math.floor(Math.random() * 900 + 100);
   name = name.slice(0, 20);
   localStorage.setItem(STORAGE_KEY_NAME, name);
   state.playerName = name;
@@ -653,7 +646,9 @@ dom.btnStopTimer.addEventListener('click', () => {
 
   renderPlayers();
 
+  // Invia SEMPRE le risposte all'host, anche se il timer è fermato localmente
   if (!state.isHost && state.send) {
+    state.send.answers({ answers: state.myAnswers });
     state.send.stop({ remaining: state.remainingSeconds, allFilled });
   } else if (state.isHost) {
     if (allFilled && !state.stop.firstPeerKey) {
@@ -690,6 +685,9 @@ function onRoundTimeUp() {
 // SCORING (host)
 // ------------------------------------------------------------
 async function collectAndScore() {
+  // Attendi 1,5 secondi per permettere alle risposte dei client di arrivare
+  await new Promise(r => setTimeout(r, 1500));
+
   const allAnswers = new Map();
   allAnswers.set('self', { name: state.playerName, answers: state.myAnswers });
   for (const [peerId, peer] of state.peers) {
@@ -792,21 +790,34 @@ async function collectAndScore() {
 // VERIFICA PAROLE
 // ------------------------------------------------------------
 async function verifyWord(word, letter) {
+  // Parole troppo corte non sono valide (una singola lettera non è una parola)
+  if (word.length < 2) return false;
+
+  // Deve iniziare con la lettera del round
   if (word[0].toUpperCase() !== letter) return false;
 
+  // 1. Wikipedia (priorità)
   try {
-    const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=5`;
+    const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=10`;
     const res = await fetch(url);
     const data = await res.json();
     if (data[1] && data[1].length > 0) {
       const lower = word.toLowerCase();
-      const match = data[1].some(t => t.toLowerCase().includes(lower));
+      // Corrispondenza esatta o parola intera nel titolo (non sottostringa)
+      const match = data[1].some(t => {
+        const title = t.toLowerCase();
+        if (title === lower) return true;
+        const escaped = lower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+        return regex.test(title);
+      });
       if (match) return true;
     }
   } catch (e) {
     console.warn('Wikipedia error:', e);
   }
 
+  // 2. Fallback Gemini via Worker
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
@@ -873,7 +884,6 @@ dom.btnNextRound.addEventListener('click', () => {
 // BOOT
 // ------------------------------------------------------------
 function boot() {
-  // Pre-popola il campo nome con il valore salvato
   if (dom.inputPlayerName) {
     const saved = localStorage.getItem(STORAGE_KEY_NAME);
     if (saved) dom.inputPlayerName.value = saved;
