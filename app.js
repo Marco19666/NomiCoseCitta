@@ -244,17 +244,20 @@ function initRoom(isHost, roomCode) {
   }
 
   onPresence((data, peerId) => {
+    // La presenza può essere annunciata più volte: aggiorna solo i metadati
+    // e conserva risposte/prontezza già ricevute per questa manche.
+    const previous = state.peers.get(peerId) || {};
     state.peers.set(peerId, {
-      name: data.name,
-      isHost: data.isHost,
-      ready: false,
-      answers: null,
+      ...previous,
+      name: data.name || previous.name || 'Giocatore',
+      isHost: Boolean(data.isHost),
+      ready: previous.ready || false,
+      answers: previous.answers || null,
     });
     renderPlayers();
     if (state.isHost) {
       sendConfig({ config: state.config }, peerId);
     }
-    announcePresence();
   });
 
   onConfig((data) => {
@@ -285,40 +288,31 @@ function initRoom(isHost, roomCode) {
     }
   });
 
-  onAnswers((data) => {
-    if (!state.isHost) return;
-    console.log('HOST onAnswers:', data);
-    const name = data.name;
-    if (name === state.playerName) {
-      state.myAnswers = data.answers || {};
+  onAnswers((data, peerId) => {
+    if (!state.isHost || !data) return;
+    console.log('HOST onAnswers:', data, peerId);
+    const peer = state.peers.get(peerId);
+    if (!peer) {
+      console.warn('Risposte ricevute da peer non ancora presente:', peerId);
       return;
     }
-    for (const peer of state.peers.values()) {
-      if (peer.name === name) {
-        peer.answers = data.answers || {};
-        peer.ready = true;
-        break;
-      }
-    }
+    peer.answers = data.answers && typeof data.answers === 'object' ? data.answers : {};
+    peer.ready = true;
     renderPlayers();
+    checkAllDone();
   });
 
-  onDone((data) => {
-    if (!state.isHost) return;
-    const name = data.name;
+  onDone((data, peerId) => {
+    if (!state.isHost || !data) return;
+    const peer = state.peers.get(peerId);
+    if (!peer) {
+      console.warn('Segnale done ricevuto da peer non ancora presente:', peerId);
+      return;
+    }
     if (!state.firstDone && data.allFilled) {
-      state.firstDone = { name, allFilled: true };
+      state.firstDone = { peerKey: peerId, allFilled: true };
     }
-    if (name === state.playerName) {
-      state.myReady = true;
-    } else {
-      for (const peer of state.peers.values()) {
-        if (peer.name === name) {
-          peer.ready = true;
-          break;
-        }
-      }
-    }
+    peer.ready = true;
     renderPlayers();
     checkAllDone();
   });
@@ -507,6 +501,7 @@ function startNewRound() {
 
   state.firstDone = null;
   state.myReady = false;
+  state.myAnswers = {};
   for (const peer of state.peers.values()) {
     peer.ready = false;
     peer.answers = null;
@@ -686,9 +681,9 @@ async function collectAndScore() {
   await new Promise(r => setTimeout(r, 2500));
 
   const allAnswers = new Map();
-  allAnswers.set(state.playerName, { name: state.playerName, answers: state.myAnswers });
-  for (const peer of state.peers.values()) {
-    allAnswers.set(peer.name, { name: peer.name, answers: peer.answers || {} });
+  allAnswers.set('__host__', { name: state.playerName, answers: state.myAnswers });
+  for (const [peerId, peer] of state.peers.entries()) {
+    allAnswers.set(peerId, { name: peer.name, answers: peer.answers || {} });
   }
 
   const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
@@ -739,7 +734,7 @@ async function collectAndScore() {
   }
 
   if (state.firstDone && state.firstDone.allFilled) {
-    const firstKey = state.firstDone.name;
+    const firstKey = state.firstDone.peerKey;
     let allValid = true;
     let hasAnyWord = false;
     for (const cat of categories) {
@@ -786,7 +781,87 @@ async function collectAndScore() {
 // ------------------------------------------------------------
 // VERIFICA PAROLE (con categoria)
 // ------------------------------------------------------------
+async function verifyCityWithWikidata(word) {
+  const normalize = value => String(value || '')
+    .normalize('NFD')
+    .replace(/[\\u0300-\\u036f]/g, '')
+    .toLocaleLowerCase('it')
+    .replace(/[^\\p{L}\\p{N}]+/gu, ' ')
+    .trim();
+
+  try {
+    const searchUrl = new URL('https://www.wikidata.org/w/api.php');
+    searchUrl.search = new URLSearchParams({
+      action: 'wbsearchentities',
+      search: word,
+      language: 'it',
+      uselang: 'it',
+      type: 'item',
+      limit: '10',
+      format: 'json',
+      origin: '*',
+    });
+    const searchRes = await fetch(searchUrl);
+    if (!searchRes.ok) throw new Error(`Wikidata search HTTP ${searchRes.status}`);
+    const searchData = await searchRes.json();
+    const exact = (searchData.search || []).filter(item =>
+      normalize(item.label) === normalize(word) ||
+      (item.aliases || []).some(alias => normalize(alias) === normalize(word))
+    );
+    if (!exact.length) return false;
+
+    const ids = exact.map(item => item.id).filter(Boolean);
+    if (!ids.length) return false;
+    const entityUrl = new URL('https://www.wikidata.org/w/api.php');
+    entityUrl.search = new URLSearchParams({
+      action: 'wbgetentities',
+      ids: ids.join('|'),
+      props: 'claims',
+      format: 'json',
+      origin: '*',
+    });
+    const entityRes = await fetch(entityUrl);
+    if (!entityRes.ok) throw new Error(`Wikidata entities HTTP ${entityRes.status}`);
+    const entityData = await entityRes.json();
+
+    // Classi Wikidata: città, paese, villaggio, comune e insediamento umano.
+    const cityTypes = new Set([
+      'Q515', 'Q3957', 'Q532', 'Q15284', 'Q1637706',
+      'Q486972', 'Q200250', 'Q7930989'
+    ]);
+    return Object.values(entityData.entities || {}).some(entity =>
+      (entity.claims?.P31 || []).some(claim =>
+        cityTypes.has(claim.mainsnak?.datavalue?.value?.id)
+      )
+    );
+  } catch (error) {
+    console.warn('Wikidata error (fallback Gemini):', error);
+    return false;
+  }
+}
+
 async function verifyWord(word, letter, category) {
+  if (word.length < 2) return false;
+  if (word[0].toLocaleUpperCase('it') !== letter) return false;
+
+  if (category === 'Città') {
+    // Wikidata è la fonte strutturata principale per distinguere una città
+    // da un semplice titolo o da una parola che le assomiglia.
+    if (await verifyCityWithWikidata(word)) return true;
+  }
+
+  if (category === 'Cose' || category === 'Nomi' || category === 'Città') {
+    try {
+      const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=10`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data[1] && data[1].length > 0) {
+          const lower = word.toLocaleLowerCase('it');
+          const match = data[1].some(t => {
+            const title = t.toLocaleLowerCase('it');
+            if (title === lower) return true;
+            const escaped = lower.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\async function verifyWord(word, letter, category) {
   if (word.length < 2) return false;
   if (word[0].toUpperCase() !== letter) return false;
 
@@ -816,6 +891,37 @@ async function verifyWord(word, letter, category) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ word, letter, category }),
     });
+    const data = await res.json();
+    return data.valid === true;
+  } catch (e) {
+    console.warn('Worker error:', e);
+    return false;
+  }
+}
+
+');
+            return new RegExp(`\\\\b${escaped}\\\\b`, 'i').test(title);
+          });
+          if (match && category !== 'Città') return true;
+        }
+      }
+    } catch (e) {
+      console.warn('Wikipedia error:', e);
+    }
+  }
+
+  // Fallback semantico: se Wikidata/Wikipedia non confermano o non rispondono,
+  // Gemini può comunque riconoscere località recenti o con etichette alternative.
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ word, letter, category }),
+    });
+    if (!res.ok) {
+      console.warn('Worker verification HTTP error:', res.status);
+      return false;
+    }
     const data = await res.json();
     return data.valid === true;
   } catch (e) {
