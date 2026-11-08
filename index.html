@@ -8,7 +8,6 @@
 </head>
 <body>
 
-  <!-- Header -->
   <header class="app-header">
     <h1 class="app-title">Nomi Cose Città</h1>
     <div class="room-badge" id="roomBadge" hidden>
@@ -23,7 +22,6 @@
     <!-- ============ LOBBY ============ -->
     <section id="screenLobby" class="screen active">
 
-      <!-- Entrata / creazione stanza -->
       <div class="card" id="joinCard">
         <h2 class="card-title">Entra in una stanza</h2>
         <div class="join-actions">
@@ -37,11 +35,9 @@
         </div>
       </div>
 
-      <!-- Configurazione partita (visibile quando si è in stanza) -->
       <div class="card" id="configCard" hidden>
         <h2 class="card-title">Configurazione partita</h2>
 
-        <!-- Categorie -->
         <div class="field-group">
           <label class="field-label">Categorie fisse</label>
           <div class="chips">
@@ -78,7 +74,6 @@
           </div>
         </div>
 
-        <!-- Timer -->
         <div class="field-group">
           <label class="field-label">Timer</label>
           <div class="chips" id="timerOptions">
@@ -97,15 +92,31 @@
           </div>
         </div>
 
-        <!-- Giocatori -->
+        <div class="field-group">
+          <label class="field-label">Numero di manche</label>
+          <div class="chips" id="roundsOptions">
+            <label class="chip chip-selectable">
+              <input type="radio" name="rounds" value="5" class="chip-check" checked> 5
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="rounds" value="10" class="chip-check"> 10
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="rounds" value="15" class="chip-check"> 15
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="rounds" value="20" class="chip-check"> 20
+            </label>
+          </div>
+        </div>
+
         <div class="field-group">
           <label class="field-label">Giocatori <span id="playerCount" class="muted">(0)</span></label>
           <ul class="player-list" id="playerList"></ul>
         </div>
 
-        <!-- Azioni -->
         <div class="config-actions">
-          <button id="btnShareSms" class="btn btn-secondary">Condividi via SMS</button>
+          <button id="btnShareWa" class="btn btn-secondary">Condividi via WhatsApp</button>
           <button id="btnStartGame" class="btn btn-primary" disabled>Inizia partita</button>
         </div>
         <p class="hint" id="hostHint" hidden>Solo l'host può avviare la partita.</p>
@@ -128,24 +139,23 @@
           </div>
         </div>
         <div class="round-meta">
-          <span id="roundNumber" class="muted">Round 1</span>
+          <span id="roundNumber" class="muted">Manche 1</span>
           <span id="roundSeed" class="muted" title="Seed condiviso del round"></span>
         </div>
       </div>
 
-      <!-- Input per categoria -->
       <div class="card" id="categoriesCard">
         <h2 class="card-title">Le tue risposte</h2>
         <div id="categoryInputs"></div>
       </div>
 
-      <!-- Azioni di gioco -->
       <div class="card game-actions">
         <button id="btnDone" class="btn btn-accent btn-block">Ho finito!</button>
+        <button id="btnStopTimer" class="btn btn-stop btn-block" disabled>Stop timer (+15 se tutte valide)</button>
         <p class="hint" id="doneHint" hidden>Hai già segnato "finito". Attendi la fine del timer.</p>
+        <p class="hint" id="stopHint" hidden>Timer fermato. In attesa della verifica a fine manche.</p>
       </div>
 
-      <!-- Stato giocatori -->
       <div class="card">
         <label class="field-label">Giocatori</label>
         <ul class="player-list" id="gamePlayerList"></ul>
@@ -156,17 +166,22 @@
     <!-- ============ RISULTATI ============ -->
     <section id="screenResults" class="screen">
       <div class="card">
-        <h2 class="card-title">Risultati</h2>
+        <h2 class="card-title" id="resultsTitle">Risultati manche</h2>
+        <div id="standingsContent"></div>
+      </div>
+      <div class="card">
+        <h2 class="card-title">Dettaglio manche</h2>
         <div id="resultsContent"></div>
+      </div>
+      <div class="card">
         <div class="config-actions">
-          <button id="btnNextRound" class="btn btn-primary" hidden>Prossimo round</button>
+          <button id="btnNextRound" class="btn btn-primary btn-block" hidden>Prossima manche</button>
         </div>
       </div>
     </section>
 
   </main>
 
-  <!-- Toast -->
   <div id="toast" class="toast" hidden></div>
 
   <script type="module" src="app.js"></script>
