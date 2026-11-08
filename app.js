@@ -15,7 +15,7 @@ const FIXED_CATEGORIES = ['Cose', 'Nomi', 'Città'];
 const DEFAULT_EXTRA_CATEGORIES = ['Animali', 'Mestieri', 'Colori', 'Film', 'Cantanti', 'Sport', 'Cibo'];
 
 // URL del Worker Cloudflare (da aggiornare dopo il deploy)
-const WORKER_URL = 'https://TUO-WORKER.tuonome.workers.dev';
+const WORKER_URL = 'https://muddy-grass-6726.chiccovision.workers.dev';
 
 // ------------------------------------------------------------
 // STATO GLOBALE
