@@ -47,19 +47,26 @@ export default {
       });
     }
 
-    const systemInstruction = `Sei un verificatore per il gioco italiano "Nomi Cose Città".
-Il tuo unico compito è determinare se una parola è valida per una specifica categoria e lettera iniziale.
-Criteri di validità:
-- deve essere una parola italiana esistente e di senso compiuto;
-- deve appartenere alla categoria richiesta (es. "Città" = città italiana o estera riconosciuta; "Animali" = specie animale; "Mestieri" = professione; "Colori" = colore; "Film" = titolo di film; "Cantanti" = nome d'arte o cognome di cantante; "Sport" = disciplina sportiva; "Cibo" = alimento o piatto; "Cose" = oggetto o concetto concreto; "Nomi" = nome proprio di persona);
-- deve iniziare con la lettera indicata (indipendentemente da maiuscole/minuscole);
-- Valuta il significato comune della parola, non pretendere che sia una voce presente in Wikipedia.
-- Esempi: "daino" è valido per Animali; "Domodossola" è valido per Città; "drago" NON è una cosa comune se la categoria richiede oggetti concreti.
-- Non rifiutare una parola solo perché poco comune o perché non conosci una fonte specifica.
-- NON deve essere una parola inventata, un acronimo privo di senso, una frase, o una parola di una sola lettera.
-Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza punteggiatura aggiuntiva, senza altro testo.`;
-
-    const userPrompt = `La parola "${word}" è valida come "${category || 'Cose'}" che inizia con la lettera "${letter}"?`;
+    const systemInstruction = `Sei il giudice semantico di un gioco italiano "Nomi Cose Città".
+Valuta con rigore la parola nel significato comune italiano, la categoria e la lettera iniziale.
+Regole:
+- La parola deve essere realmente usata e riconoscibile in italiano; non inventare significati o accettare refusi evidenti.
+- Deve appartenere alla categoria richiesta, non basta che esista o abbia una pagina enciclopedica.
+- Cose: oggetto o cosa concreta e identificabile; non sigle isolate, abbreviazioni, lettere o parole fuori categoria.
+- Nomi: nome proprio di persona.
+- Città: centro abitato/città riconosciuta, in Italia o all'estero.
+- Animali: animale o specie animale; Mestieri: professione; Sport: disciplina sportiva; applica lo stesso criterio semantico alle altre categorie.
+- La parola deve iniziare con la lettera indicata.
+- Non richiedere che la parola sia famosa o abbia una pagina Wikipedia.
+- Se la parola è plausibile ma non puoi stabilire con sicurezza la categoria, usa uncertain.
+Esempi vincolanti: "daino" in Animali = valid; "Domodossola" in Città = valid; "economo" in Sport = invalid; "ES" in Cose = invalid; "erborista" in Mestieri = valid; "drago" in Cose = invalid.
+Rispondi esclusivamente in JSON con questa forma: {"status":"valid"} oppure {"status":"invalid"} oppure {"status":"uncertain"}.`;
+    
+    const userPrompt = `Valuta questa risposta.
+Categoria: ${category || 'Cose'}
+Lettera richiesta: ${letter}
+Risposta: ${word}
+La risposta inizia con la lettera richiesta? Valuta anche il significato e l'appartenenza alla categoria.`;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
 
@@ -75,8 +82,9 @@ Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza 
             { role: 'user', parts: [{ text: userPrompt }] }
           ],
           generationConfig: {
-            maxOutputTokens: 16,
-          thinkingConfig: { thinkingBudget: 0 },
+            maxOutputTokens: 32,
+            thinkingConfig: { thinkingBudget: 0 },
+            responseMimeType: 'application/json',
           },
         }),
       });
@@ -94,14 +102,19 @@ Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza 
       }
 
       const geminiData = await geminiRes.json();
-      const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      const normalized = text.trim().toLowerCase();
-      // Una risposta vuota o inattesa è un errore di verifica, non un "no".
-      const valid = /^(sì|si)(?:[.!\s]|$)/i.test(normalized)
-        ? true
-        : /^no(?:[.!\s]|$)/i.test(normalized) ? false : null;
+      const responseText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      let status = 'uncertain';
+      try {
+        const parsed = JSON.parse(responseText.trim());
+        if (parsed.status === 'valid' || parsed.status === 'invalid' || parsed.status === 'uncertain') {
+          status = parsed.status;
+        }
+      } catch {
+        // Una risposta non conforme non diventa mai automaticamente valida o non valida.
+      }
 
-      return new Response(JSON.stringify({ valid }), {
+      const valid = status === 'valid' ? true : status === 'invalid' ? false : null;
+      return new Response(JSON.stringify({ valid, status }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
