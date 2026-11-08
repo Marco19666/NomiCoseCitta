@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Nomi Cose Città</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <h1 class="app-title">Nomi Cose Città</h1>
+    <div class="room-badge" id="roomBadge" hidden>
+      <span class="room-label">Stanza</span>
+      <span class="room-code" id="roomCode">—</span>
+      <span class="conn-dot" id="connDot" title="Connessione"></span>
+    </div>
+  </header>
+
+  <main class="app-main">
+
+    <!-- ============ LOBBY ============ -->
+    <section id="screenLobby" class="screen active">
+
+      <!-- Entrata / creazione stanza -->
+      <div class="card" id="joinCard">
+        <h2 class="card-title">Entra in una stanza</h2>
+        <div class="join-actions">
+          <button id="btnCreateRoom" class="btn btn-primary">Crea stanza</button>
+          <div class="join-divider"><span>oppure</span></div>
+          <div class="join-input-row">
+            <input id="inputRoomCode" class="input" type="text"
+                   placeholder="Codice stanza" autocomplete="off" maxlength="12">
+            <button id="btnJoinRoom" class="btn btn-secondary">Entra</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Configurazione partita (visibile quando si è in stanza) -->
+      <div class="card" id="configCard" hidden>
+        <h2 class="card-title">Configurazione partita</h2>
+
+        <!-- Categorie -->
+        <div class="field-group">
+          <label class="field-label">Categorie fisse</label>
+          <div class="chips">
+            <span class="chip chip-locked">Cose</span>
+            <span class="chip chip-locked">Nomi</span>
+            <span class="chip chip-locked">Città</span>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Categorie extra</label>
+          <div class="chips" id="extraCategories">
+            <label class="chip chip-selectable">
+              <input type="checkbox" value="Animali" class="chip-check"> Animali
+            </label>
+            <label class="chip chip-selectable">
+              <input type="checkbox" value="Mestieri" class="chip-check"> Mestieri
+            </label>
+            <label class="chip chip-selectable">
+              <input type="checkbox" value="Colori" class="chip-check"> Colori
+            </label>
+            <label class="chip chip-selectable">
+              <input type="checkbox" value="Film" class="chip-check"> Film
+            </label>
+            <label class="chip chip-selectable">
+              <input type="checkbox" value="Cantanti" class="chip-check"> Cantanti
+            </label>
+            <label class="chip chip-selectable">
+              <input type="checkbox" value="Sport" class="chip-check"> Sport
+            </label>
+            <label class="chip chip-selectable">
+              <input type="checkbox" value="Cibo" class="chip-check"> Cibo
+            </label>
+          </div>
+        </div>
+
+        <!-- Timer -->
+        <div class="field-group">
+          <label class="field-label">Timer</label>
+          <div class="chips" id="timerOptions">
+            <label class="chip chip-selectable">
+              <input type="radio" name="timer" value="60" class="chip-check" checked> 60 s
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="timer" value="90" class="chip-check"> 90 s
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="timer" value="120" class="chip-check"> 120 s
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="timer" value="0" class="chip-check"> Nessuno
+            </label>
+          </div>
+        </div>
+
+        <!-- Giocatori -->
+        <div class="field-group">
+          <label class="field-label">Giocatori <span id="playerCount" class="muted">(0)</span></label>
+          <ul class="player-list" id="playerList"></ul>
+        </div>
+
+        <!-- Azioni -->
+        <div class="config-actions">
+          <button id="btnShareSms" class="btn btn-secondary">Condividi via SMS</button>
+          <button id="btnStartGame" class="btn btn-primary" disabled>Inizia partita</button>
+        </div>
+        <p class="hint" id="hostHint" hidden>Solo l'host può avviare la partita.</p>
+      </div>
+
+    </section>
+
+    <!-- ============ GIOCO ============ -->
+    <section id="screenGame" class="screen">
+
+      <div class="card game-status">
+        <div class="round-info">
+          <div class="round-letter">
+            <span class="letter-label">Lettera</span>
+            <span class="letter-value" id="roundLetter">—</span>
+          </div>
+          <div class="round-timer" id="roundTimerBox">
+            <span class="timer-label">Tempo</span>
+            <span class="timer-value" id="roundTimer">—</span>
+          </div>
+        </div>
+        <div class="round-meta">
+          <span id="roundNumber" class="muted">Round 1</span>
+          <span id="roundSeed" class="muted" title="Seed condiviso del round"></span>
+        </div>
+      </div>
+
+      <!-- Input per categoria -->
+      <div class="card" id="categoriesCard">
+        <h2 class="card-title">Le tue risposte</h2>
+        <div id="categoryInputs"></div>
+      </div>
+
+      <!-- Azioni di gioco -->
+      <div class="card game-actions">
+        <button id="btnDone" class="btn btn-accent btn-block">Ho finito!</button>
+        <p class="hint" id="doneHint" hidden>Hai già segnato "finito". Attendi la fine del timer.</p>
+      </div>
+
+      <!-- Stato giocatori -->
+      <div class="card">
+        <label class="field-label">Giocatori</label>
+        <ul class="player-list" id="gamePlayerList"></ul>
+      </div>
+
+    </section>
+
+    <!-- ============ RISULTATI ============ -->
+    <section id="screenResults" class="screen">
+      <div class="card">
+        <h2 class="card-title">Risultati</h2>
+        <div id="resultsContent"></div>
+        <div class="config-actions">
+          <button id="btnNextRound" class="btn btn-primary" hidden>Prossimo round</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
