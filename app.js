@@ -1,5 +1,5 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (v6 con Opzione A)
+// NOMI COSE CITTÀ — app.js (v7)
 // ============================================================
 
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
@@ -45,8 +45,7 @@ const state = {
 
   scores: new Map(),
 
-  // Primo giocatore che ha premuto "Ho finito!" con tutti i campi compilati
-  firstDone: null, // { name, allFilled }
+  firstDone: null,
 
   timerInterval: null,
 };
@@ -286,7 +285,6 @@ function initRoom(isHost, roomCode) {
     }
   });
 
-  // Risposte: identifica per nome (gli ID di Trystero possono non coincidere)
   onAnswers((data) => {
     if (!state.isHost) return;
     const name = data.name;
@@ -304,14 +302,12 @@ function initRoom(isHost, roomCode) {
     renderPlayers();
   });
 
-  // "Ho finito!" (nuovo: gestisce anche il bonus)
   onDone((data) => {
     if (!state.isHost) return;
     const name = data.name;
     if (!state.firstDone && data.allFilled) {
       state.firstDone = { name, allFilled: true };
     }
-    // Aggiorna lo stato "pronto" del peer
     if (name === state.playerName) {
       state.myReady = true;
     } else {
@@ -556,6 +552,7 @@ function prepareGameUI(letter, roundNumber, seed, categories) {
   state.myAnswers = {};
   state.myReady = false;
   dom.btnDone.disabled = false;
+  dom.btnDone.textContent = 'Ho finito!';
   dom.doneHint.hidden = true;
 
   for (const input of dom.categoryInputs.querySelectorAll('input')) {
@@ -612,29 +609,32 @@ function stopTimer() {
 }
 
 // ------------------------------------------------------------
-// HO FINITO! (unico bottone: invia risposte, ferma timer locale, concorre al bonus)
+// HO FINITO!
 // ------------------------------------------------------------
 dom.btnDone.addEventListener('click', () => {
   if (state.myReady) return;
   state.myReady = true;
   dom.btnDone.disabled = true;
   dom.doneHint.hidden = false;
+  dom.btnDone.textContent = 'In attesa...';
   renderPlayers();
 
   const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
   const allFilled = categories.every(cat => (state.myAnswers[cat] || '').length > 0);
 
-  // Ferma il timer locale
   stopTimer();
   dom.roundTimer.textContent = formatTime(state.remainingSeconds);
 
-  // Invia risposte e stato "finito" all'host (o registra localmente se host)
   if (!state.isHost && state.send) {
     state.send.answers({ answers: state.myAnswers, name: state.playerName });
     state.send.done({ name: state.playerName, allFilled });
   } else if (state.isHost) {
     if (!state.firstDone && allFilled) {
       state.firstDone = { name: state.playerName, allFilled: true };
+    }
+    if (state.round.active) {
+      state.round.active = false;
+      collectAndScore();
     }
   }
 
@@ -649,6 +649,7 @@ dom.btnDone.addEventListener('click', () => {
 // FINE MANCHE
 // ------------------------------------------------------------
 function onRoundTimeUp() {
+  if (!state.round.active) return; // round già chiuso (es. host ha premuto "Ho finito!")
   state.round.active = false;
   stopTimer();
 
@@ -666,7 +667,6 @@ function onRoundTimeUp() {
 // SCORING (host)
 // ------------------------------------------------------------
 async function collectAndScore() {
-  // Attendi 1,5 secondi per permettere alle risposte dei client di arrivare
   await new Promise(r => setTimeout(r, 1500));
 
   const allAnswers = new Map();
@@ -722,8 +722,6 @@ async function collectAndScore() {
     }
   }
 
-  // Bonus: assegnato al primo che ha premuto "Ho finito!" con tutti i campi
-  // compilati E tutte le parole valide
   if (state.firstDone && state.firstDone.allFilled) {
     const firstKey = state.firstDone.name;
     let allValid = true;
@@ -776,7 +774,6 @@ async function verifyWord(word, letter, category) {
   if (word.length < 2) return false;
   if (word[0].toUpperCase() !== letter) return false;
 
-  // Wikipedia solo per Cose e Nomi
   if (category === 'Cose' || category === 'Nomi') {
     try {
       const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=10`;
@@ -797,7 +794,6 @@ async function verifyWord(word, letter, category) {
     }
   }
 
-  // Gemini per tutte le categorie (e fallback per Cose/Nomi)
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
