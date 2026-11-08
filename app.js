@@ -1,5 +1,5 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (v7)
+// NOMI COSE CITTÀ — app.js (v8)
 // ============================================================
 
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
@@ -287,6 +287,7 @@ function initRoom(isHost, roomCode) {
 
   onAnswers((data) => {
     if (!state.isHost) return;
+    console.log('HOST onAnswers:', data);
     const name = data.name;
     if (name === state.playerName) {
       state.myAnswers = data.answers || {};
@@ -319,6 +320,7 @@ function initRoom(isHost, roomCode) {
       }
     }
     renderPlayers();
+    checkAllDone();
   });
 
   onRoundStart((data) => {
@@ -347,6 +349,23 @@ function initRoom(isHost, roomCode) {
   });
 
   setTimeout(announcePresence, 500);
+}
+
+// ------------------------------------------------------------
+// CHECK TUTTI PRONTI (host)
+// ------------------------------------------------------------
+function checkAllDone() {
+  if (!state.isHost) return;
+  if (!state.round.active) return;
+  if (!state.myReady) return;
+  for (const peer of state.peers.values()) {
+    if (!peer.ready) return;
+  }
+  // Tutti hanno finito: chiudi il round
+  state.round.active = false;
+  stopTimer();
+  showToast('Tutti hanno finito! Calcolo dei risultati...');
+  collectAndScore();
 }
 
 // ------------------------------------------------------------
@@ -632,10 +651,7 @@ dom.btnDone.addEventListener('click', () => {
     if (!state.firstDone && allFilled) {
       state.firstDone = { name: state.playerName, allFilled: true };
     }
-    if (state.round.active) {
-      state.round.active = false;
-      collectAndScore();
-    }
+    checkAllDone();
   }
 
   if (!allFilled) {
@@ -649,7 +665,7 @@ dom.btnDone.addEventListener('click', () => {
 // FINE MANCHE
 // ------------------------------------------------------------
 function onRoundTimeUp() {
-  if (!state.round.active) return; // round già chiuso (es. host ha premuto "Ho finito!")
+  if (!state.round.active) return;
   state.round.active = false;
   stopTimer();
 
@@ -667,7 +683,7 @@ function onRoundTimeUp() {
 // SCORING (host)
 // ------------------------------------------------------------
 async function collectAndScore() {
-  await new Promise(r => setTimeout(r, 1500));
+  await new Promise(r => setTimeout(r, 2500));
 
   const allAnswers = new Map();
   allAnswers.set(state.playerName, { name: state.playerName, answers: state.myAnswers });
