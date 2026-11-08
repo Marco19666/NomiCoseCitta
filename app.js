@@ -814,7 +814,7 @@ async function verifyCityWithWikidata(word) {
     const entityData = await entityRes.json();
     // Classi di città, comuni, insediamenti e capitali presenti in Wikidata.
     const cityTypes = new Set([
-      'Q515', 'Q3957', 'Q532', 'Q15284', 'Q1637706', 'Q486972',
+      'Q515', 'Q3957', 'Q532', 'Q15284', 'Q747074', 'Q1637706', 'Q486972',
       'Q200250', 'Q7930989', 'Q1549591', 'Q174844', 'Q5119'
     ]);
     return Object.values(entityData.entities || {}).some(entity =>
