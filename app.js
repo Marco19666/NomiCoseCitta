@@ -1,5 +1,5 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (v3 con classifica, stop timer, WhatsApp)
+// NOMI COSE CITTÀ — app.js (v4 con protezioni difensive)
 // ============================================================
 
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
@@ -26,7 +26,6 @@ const state = {
   peers: new Map(),
 
   config: {
-    extraCategories: [...DEFAULT_EXTRA_CATEGORIES],
     selectedExtras: [],
     timerSeconds: 60,
     totalRounds: 5,
@@ -45,11 +44,10 @@ const state = {
   myReady: false,
   myStopped: false,
   myStopRemaining: null,
+  remainingSeconds: 0,
 
-  // Classifica accumulata: peerKey -> { name, total, rounds, bonusCount }
   scores: new Map(),
 
-  // Stato dello stop timer nel round corrente (autorità host)
   stop: {
     firstPeerKey: null,
     firstRemaining: null,
@@ -68,6 +66,7 @@ const dom = {
   screenResults: $('screenResults'),
   joinCard: $('joinCard'),
   configCard: $('configCard'),
+  inputPlayerName: $('inputPlayerName'),
   btnCreateRoom: $('btnCreateRoom'),
   inputRoomCode: $('inputRoomCode'),
   btnJoinRoom: $('btnJoinRoom'),
@@ -140,11 +139,11 @@ function pickLetter(seed, previousLetter) {
 
 function showScreen(name) {
   for (const s of [dom.screenLobby, dom.screenGame, dom.screenResults]) {
-    s.classList.remove('active');
+    if (s) s.classList.remove('active');
   }
-  if (name === 'lobby') dom.screenLobby.classList.add('active');
-  if (name === 'game') dom.screenGame.classList.add('active');
-  if (name === 'results') dom.screenResults.classList.add('active');
+  if (name === 'lobby' && dom.screenLobby) dom.screenLobby.classList.add('active');
+  if (name === 'game' && dom.screenGame) dom.screenGame.classList.add('active');
+  if (name === 'results' && dom.screenResults) dom.screenResults.classList.add('active');
 }
 
 function escapeHtml(s) {
@@ -154,15 +153,18 @@ function escapeHtml(s) {
 }
 
 function ensurePlayerName() {
-  let name = localStorage.getItem(STORAGE_KEY_NAME);
-  if (!name) {
-    name = prompt('Come ti chiami?');
-    if (!name || !name.trim()) {
-      name = 'Giocatore ' + Math.floor(Math.random() * 900 + 100);
-    }
-    name = name.trim().slice(0, 20);
-    localStorage.setItem(STORAGE_KEY_NAME, name);
+  let name = '';
+  if (dom.inputPlayerName) {
+    name = dom.inputPlayerName.value.trim();
   }
+  if (!name) {
+    name = localStorage.getItem(STORAGE_KEY_NAME) || '';
+  }
+  if (!name) {
+    name = 'Giocatore ' + Math.floor(Math.random() * 900 + 100);
+  }
+  name = name.slice(0, 20);
+  localStorage.setItem(STORAGE_KEY_NAME, name);
   state.playerName = name;
   return name;
 }
@@ -180,7 +182,6 @@ function getOrCreateScore(peerKey, name) {
 }
 
 function addRoundScores(pointsByKey) {
-  // pointsByKey: Map<peerKey, { name, points, bonus }>
   for (const [key, data] of pointsByKey) {
     const s = getOrCreateScore(key, data.name);
     s.total += data.points + (data.bonus || 0);
@@ -190,6 +191,7 @@ function addRoundScores(pointsByKey) {
 }
 
 function renderStandings() {
+  if (!dom.standingsContent) return;
   const arr = [...state.scores.entries()]
     .map(([key, data]) => ({ key, ...data }))
     .sort((a, b) => b.total - a.total);
@@ -219,20 +221,20 @@ function initRoom(isHost, roomCode) {
   const room = joinRoom({ appId: APP_ID }, roomCode);
   state.room = room;
 
-  dom.roomBadge.hidden = false;
-  dom.roomCode.textContent = roomCode;
-  dom.connDot.classList.add('online');
-  dom.joinCard.hidden = true;
-  dom.configCard.hidden = false;
+  if (dom.roomBadge) dom.roomBadge.hidden = false;
+  if (dom.roomCode) dom.roomCode.textContent = roomCode;
+  if (dom.connDot) dom.connDot.classList.add('online');
+  if (dom.joinCard) dom.joinCard.hidden = true;
+  if (dom.configCard) dom.configCard.hidden = false;
 
   if (isHost) {
-    dom.btnStartGame.disabled = false;
-    dom.btnShareWa.hidden = false;
-    dom.hostHint.hidden = true;
+    if (dom.btnStartGame) dom.btnStartGame.disabled = false;
+    if (dom.btnShareWa) dom.btnShareWa.hidden = false;
+    if (dom.hostHint) dom.hostHint.hidden = true;
   } else {
-    dom.btnStartGame.disabled = true;
-    dom.btnShareWa.hidden = true;
-    dom.hostHint.hidden = false;
+    if (dom.btnStartGame) dom.btnStartGame.disabled = true;
+    if (dom.btnShareWa) dom.btnShareWa.hidden = true;
+    if (dom.hostHint) dom.hostHint.hidden = false;
   }
 
   const [sendPresence, onPresence] = room.makeAction('presence');
@@ -271,21 +273,28 @@ function initRoom(isHost, roomCode) {
   });
 
   onConfig((data) => {
-    if (!state.isHost) {
-      state.config = data.config;
+    if (state.isHost) return;
+    if (data && data.config) {
+      state.config = {
+        selectedExtras: Array.isArray(data.config.selectedExtras) ? data.config.selectedExtras : [],
+        timerSeconds: data.config.timerSeconds || 60,
+        totalRounds: data.config.totalRounds || 5,
+      };
       applyConfigToUI();
     }
   });
 
   room.onPeerJoin(peerId => {
-    dom.connDot.classList.add('online');
+    console.log('Peer joined:', peerId);
+    if (dom.connDot) dom.connDot.classList.add('online');
     setTimeout(announcePresence, 300);
   });
 
   room.onPeerLeave(peerId => {
+    console.log('Peer left:', peerId);
     state.peers.delete(peerId);
     renderPlayers();
-    if (state.peers.size === 0) {
+    if (state.peers.size === 0 && dom.connDot) {
       dom.connDot.classList.remove('online');
       dom.connDot.classList.add('offline');
     }
@@ -295,28 +304,35 @@ function initRoom(isHost, roomCode) {
     if (!state.isHost) return;
     const peer = state.peers.get(peerId);
     if (peer) {
-      peer.answers = data.answers;
+      peer.answers = data.answers || {};
       peer.ready = true;
     }
     renderPlayers();
   });
 
   onRoundStart((data) => {
+    console.log('CLIENT onRoundStart:', JSON.stringify(data));
     if (state.isHost) return;
+    if (!data || !data.letter || !Array.isArray(data.categories)) {
+      console.error('Dati roundStart invalidi:', data);
+      showToast('Errore: dati di gioco non validi.');
+      return;
+    }
     startRoundLocal(data);
   });
 
   onResults((data) => {
     if (state.isHost) return;
-    // Salva i punteggi ricevuti e aggiorna classifica
     if (data.scores) {
       state.scores = new Map(data.scores);
     }
     renderStandings();
     renderResults(data.results);
     showScreen('results');
-    dom.btnNextRound.hidden = true;
-    dom.resultsTitle.textContent = data.isLastRound ? 'Classifica finale' : 'Risultati manche';
+    if (dom.btnNextRound) dom.btnNextRound.hidden = true;
+    if (dom.resultsTitle) {
+      dom.resultsTitle.textContent = data.isLastRound ? 'Classifica finale' : 'Risultati manche';
+    }
   });
 
   onStop((data, peerId) => {
@@ -325,7 +341,6 @@ function initRoom(isHost, roomCode) {
     if (peer) {
       peer.stopped = true;
       peer.stopRemaining = data.remaining;
-      // Primo stopper con tutti i campi compilati
       if (!state.stop.firstPeerKey && data.allFilled) {
         state.stop.firstPeerKey = peerId;
         state.stop.firstRemaining = data.remaining;
@@ -376,14 +391,14 @@ dom.extraCategories.addEventListener('change', () => {
 dom.timerOptions.addEventListener('change', () => {
   if (!state.isHost) return;
   const selected = dom.timerOptions.querySelector('.chip-check:checked');
-  state.config.timerSeconds = parseInt(selected.value, 10);
+  if (selected) state.config.timerSeconds = parseInt(selected.value, 10);
   broadcastConfig();
 });
 
 dom.roundsOptions.addEventListener('change', () => {
   if (!state.isHost) return;
   const selected = dom.roundsOptions.querySelector('.chip-check:checked');
-  state.config.totalRounds = parseInt(selected.value, 10);
+  if (selected) state.config.totalRounds = parseInt(selected.value, 10);
   broadcastConfig();
 });
 
@@ -394,14 +409,20 @@ function broadcastConfig() {
 }
 
 function applyConfigToUI() {
-  for (const cb of dom.extraCategories.querySelectorAll('.chip-check')) {
-    cb.checked = state.config.selectedExtras.includes(cb.value);
+  if (dom.extraCategories) {
+    for (const cb of dom.extraCategories.querySelectorAll('.chip-check')) {
+      cb.checked = state.config.selectedExtras.includes(cb.value);
+    }
   }
-  for (const rb of dom.timerOptions.querySelectorAll('.chip-check')) {
-    rb.checked = parseInt(rb.value, 10) === state.config.timerSeconds;
+  if (dom.timerOptions) {
+    for (const rb of dom.timerOptions.querySelectorAll('.chip-check')) {
+      rb.checked = parseInt(rb.value, 10) === state.config.timerSeconds;
+    }
   }
-  for (const rb of dom.roundsOptions.querySelectorAll('.chip-check')) {
-    rb.checked = parseInt(rb.value, 10) === state.config.totalRounds;
+  if (dom.roundsOptions) {
+    for (const rb of dom.roundsOptions.querySelectorAll('.chip-check')) {
+      rb.checked = parseInt(rb.value, 10) === state.config.totalRounds;
+    }
   }
 }
 
@@ -409,6 +430,8 @@ function applyConfigToUI() {
 // RENDER GIOCATORI
 // ------------------------------------------------------------
 function renderPlayers() {
+  if (!dom.playerList || !dom.playerCount) return;
+
   const list = [{
     name: state.playerName + ' (tu)',
     isHost: state.isHost,
@@ -448,7 +471,7 @@ function renderPlayers() {
 }
 
 // ------------------------------------------------------------
-// AVVIO MANCHE (host)
+// AVVIO MANCHE
 // ------------------------------------------------------------
 dom.btnStartGame.addEventListener('click', () => {
   if (!state.isHost) return;
@@ -468,7 +491,6 @@ function startNewRound() {
   state.round.active = true;
   state.round.previousLetter = letter;
 
-  // Reset stop
   state.stop = { firstPeerKey: null, firstRemaining: null };
   state.myStopped = false;
   state.myStopRemaining = null;
@@ -478,7 +500,7 @@ function startNewRound() {
     peer.answers = null;
   }
 
-  const activeCategories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
+  const activeCategories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
 
   prepareGameUI(letter, state.round.number, seed, activeCategories);
 
@@ -497,6 +519,7 @@ function startNewRound() {
 }
 
 function startRoundLocal(data) {
+  console.log('startRoundLocal chiamato con:', data);
   state.round.number = data.roundNumber;
   state.round.letter = data.letter;
   state.round.seed = data.seed;
@@ -513,6 +536,11 @@ function startRoundLocal(data) {
 }
 
 function prepareGameUI(letter, roundNumber, seed, categories) {
+  if (!Array.isArray(categories)) {
+    console.error('prepareGameUI: categories non è un array', categories);
+    categories = [...FIXED_CATEGORIES];
+  }
+
   dom.roundLetter.textContent = letter;
   dom.roundNumber.textContent = `Manche ${roundNumber} di ${state.config.totalRounds}`;
   dom.roundSeed.textContent = `seed: ${seed}`;
@@ -613,8 +641,7 @@ dom.btnDone.addEventListener('click', () => {
 dom.btnStopTimer.addEventListener('click', () => {
   if (state.myStopped) return;
 
-  // Controlla che tutti i campi siano compilati
-  const categories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
+  const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
   const allFilled = categories.every(cat => (state.myAnswers[cat] || '').length > 0);
 
   state.myStopped = true;
@@ -629,7 +656,6 @@ dom.btnStopTimer.addEventListener('click', () => {
   if (!state.isHost && state.send) {
     state.send.stop({ remaining: state.remainingSeconds, allFilled });
   } else if (state.isHost) {
-    // L'host registra il proprio stop localmente
     if (allFilled && !state.stop.firstPeerKey) {
       state.stop.firstPeerKey = 'self';
       state.stop.firstRemaining = state.remainingSeconds;
@@ -670,11 +696,10 @@ async function collectAndScore() {
     allAnswers.set(peerId, { name: peer.name, answers: peer.answers || {} });
   }
 
-  const categories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
+  const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
   const results = {};
   const pointsByKey = new Map();
 
-  // Verifica parole per categoria
   for (const cat of categories) {
     results[cat] = [];
     for (const [peerKey, data] of allAnswers) {
@@ -693,7 +718,6 @@ async function collectAndScore() {
     }
   }
 
-  // Calcola punti base: 10 se valida e unica, 5 se valida ma duplicata
   for (const cat of categories) {
     const entries = results[cat];
     const wordCounts = {};
@@ -710,7 +734,6 @@ async function collectAndScore() {
     }
   }
 
-  // Accumula punti base per giocatore
   for (const cat of categories) {
     for (const e of results[cat]) {
       if (!pointsByKey.has(e.peerKey)) {
@@ -720,10 +743,8 @@ async function collectAndScore() {
     }
   }
 
-  // Bonus Stop timer: assegnato al primo stopper con tutti i campi compilati E tutte le parole valide
   if (state.stop.firstPeerKey) {
     const firstKey = state.stop.firstPeerKey;
-    // Controlla che tutte le parole di quel giocatore siano valide
     let allValid = true;
     let hasAnyWord = false;
     for (const cat of categories) {
@@ -736,7 +757,6 @@ async function collectAndScore() {
       const entry = pointsByKey.get(firstKey);
       if (entry) {
         entry.bonus = STOP_BONUS;
-        // Marca nel dettaglio
         for (const cat of categories) {
           const e = results[cat].find(x => x.peerKey === firstKey);
           if (e && e.word) e.bonusFlag = true;
@@ -745,12 +765,10 @@ async function collectAndScore() {
     }
   }
 
-  // Aggiorna classifica
   addRoundScores(pointsByKey);
 
   const isLastRound = state.round.number >= state.config.totalRounds;
 
-  // Invia ai client
   if (state.send) {
     state.send.results({
       results,
@@ -759,9 +777,8 @@ async function collectAndScore() {
     });
   }
 
-  // Mostra localmente
   renderStandings();
-  renderResults(results, pointsByKey);
+  renderResults(results);
   showScreen('results');
   dom.resultsTitle.textContent = isLastRound ? 'Classifica finale' : 'Risultati manche';
   dom.btnNextRound.hidden = !state.isHost || isLastRound;
@@ -807,7 +824,12 @@ async function verifyWord(word, letter) {
 // ------------------------------------------------------------
 // RENDER RISULTATI
 // ------------------------------------------------------------
-function renderResults(results, pointsByKey) {
+function renderResults(results) {
+  if (!dom.resultsContent) return;
+  if (!results) {
+    dom.resultsContent.innerHTML = '<p class="muted">Nessun risultato.</p>';
+    return;
+  }
   const html = Object.entries(results).map(([cat, entries]) => {
     const rows = entries.map(e => {
       const cls = e.word && !e.valid ? 'word-dup' : '';
@@ -851,8 +873,22 @@ dom.btnNextRound.addEventListener('click', () => {
 // BOOT
 // ------------------------------------------------------------
 function boot() {
-  const params = new URLSearchParams(window.location.search);
-  const roomCode = params.get('room');
+  // Pre-popola il campo nome con il valore salvato
+  if (dom.inputPlayerName) {
+    const saved = localStorage.getItem(STORAGE_KEY_NAME);
+    if (saved) dom.inputPlayerName.value = saved;
+  }
+
+  const search = window.location.search;
+  const params = new URLSearchParams(search);
+  let roomCode = params.get('room');
+
+  if (!roomCode && search.includes('room=')) {
+    const match = search.match(/[?&]room=([^&]+)/);
+    if (match) roomCode = decodeURIComponent(match[1]);
+  }
+
+  console.log('BOOT - search:', search, 'roomCode:', roomCode);
 
   if (roomCode) {
     ensurePlayerName();
