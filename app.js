@@ -1,9 +1,9 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js
-// Logica di gioco + integrazione Trystero + verifica parole
+// NOMI COSE CITTÀ — app.js (Trystero via jsDelivr)
 // ============================================================
 
-import { joinRoom } from 'https://esm.sh/trystero/torrent';
+// Importazione stabile da jsDelivr (versione specifica per evitare breaking changes)
+import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
 
 // ------------------------------------------------------------
 // COSTANTI
@@ -21,24 +21,16 @@ const WORKER_URL = 'https://TUO-WORKER.tuonome.workers.dev';
 // STATO GLOBALE
 // ------------------------------------------------------------
 const state = {
-  // Identità
   playerName: '',
   isHost: false,
   roomCode: '',
-  room: null,          // istanza Trystero
-  myPeerId: null,
-
-  // Connessioni
-  peers: new Map(),    // peerId -> { name, isReady, answers }
-
-  // Configurazione partita (autorità: host)
+  room: null,
+  peers: new Map(),
   config: {
     extraCategories: [...DEFAULT_EXTRA_CATEGORIES],
     selectedExtras: [],
     timerSeconds: 60,
   },
-
-  // Stato del round
   round: {
     number: 0,
     letter: '',
@@ -48,12 +40,8 @@ const state = {
     active: false,
     previousLetter: '',
   },
-
-  // Risposte locali del giocatore
-  myAnswers: {},       // categoria -> stringa
+  myAnswers: {},
   myReady: false,
-
-  // Timer locale
   timerInterval: null,
 };
 
@@ -62,7 +50,6 @@ const state = {
 // ------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const dom = {
-  // Lobby
   screenLobby: $('screenLobby'),
   screenGame: $('screenGame'),
   screenResults: $('screenResults'),
@@ -78,13 +65,9 @@ const dom = {
   btnShareSms: $('btnShareSms'),
   btnStartGame: $('btnStartGame'),
   hostHint: $('hostHint'),
-
-  // Badge stanza
   roomBadge: $('roomBadge'),
   roomCode: $('roomCode'),
   connDot: $('connDot'),
-
-  // Gioco
   roundLetter: $('roundLetter'),
   roundTimer: $('roundTimer'),
   roundTimerBox: $('roundTimerBox'),
@@ -94,12 +77,8 @@ const dom = {
   btnDone: $('btnDone'),
   doneHint: $('doneHint'),
   gamePlayerList: $('gamePlayerList'),
-
-  // Risultati
   resultsContent: $('resultsContent'),
   btnNextRound: $('btnNextRound'),
-
-  // Toast
   toast: $('toast'),
 };
 
@@ -118,7 +97,7 @@ function showToast(msg, duration = 2500) {
 }
 
 function generateRoomCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   const arr = new Uint8Array(6);
   crypto.getRandomValues(arr);
@@ -126,7 +105,6 @@ function generateRoomCode() {
   return code;
 }
 
-// PRNG deterministico basato su seed (xorshift32)
 function seededRandom(seed) {
   let x = seed >>> 0;
   if (x === 0) x = 1;
@@ -136,7 +114,6 @@ function seededRandom(seed) {
   return x / 4294967296;
 }
 
-// Sceglie una lettera dall'alfabeto usando il seed e la lettera precedente
 function pickLetter(seed, previousLetter) {
   const candidates = ALPHABET.split('').filter(l => l !== previousLetter);
   const r = seededRandom(seed);
@@ -152,10 +129,16 @@ function showScreen(name) {
   if (name === 'results') dom.screenResults.classList.add('active');
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 // ------------------------------------------------------------
-// NOME GIOCATORE (localStorage)
+// NOME GIOCATORE (localStorage, richiesto al primo click)
 // ------------------------------------------------------------
-function initPlayerName() {
+function ensurePlayerName() {
   let name = localStorage.getItem(STORAGE_KEY_NAME);
   if (!name) {
     name = prompt('Come ti chiami?');
@@ -166,6 +149,7 @@ function initPlayerName() {
     localStorage.setItem(STORAGE_KEY_NAME, name);
   }
   state.playerName = name;
+  return name;
 }
 
 // ------------------------------------------------------------
@@ -175,24 +159,13 @@ function initRoom(isHost, roomCode) {
   state.isHost = isHost;
   state.roomCode = roomCode;
 
-  // Configurazione Trystero
   const config = { appId: APP_ID };
   const room = joinRoom(config, roomCode);
   state.room = room;
 
-  // ID del peer locale
-  // Trystero non espone direttamente selfId, ma lo ricaviamo dagli eventi
-  // (in alternativa usiamo la callback onPeerJoin con il proprio id? No:
-  //  memorizziamo l'id quando riceviamo il primo messaggio o usiamo room.getPeers)
-  // Per semplicità, generiamo un ID locale stabile e lo includiamo nei messaggi.
-  state.myPeerId = crypto.randomUUID();
-
-  // Aggiorna UI stanza
   dom.roomBadge.hidden = false;
   dom.roomCode.textContent = roomCode;
   dom.connDot.classList.add('online');
-
-  // Mostra configurazione (solo host) o lista giocatori
   dom.joinCard.hidden = true;
   dom.configCard.hidden = false;
 
@@ -206,11 +179,9 @@ function initRoom(isHost, roomCode) {
     dom.hostHint.hidden = false;
   }
 
-  // --- Azioni Trystero ---
   const [sendPresence, onPresence] = room.makeAction('presence');
   const [sendAnswers, onAnswers] = room.makeAction('answers');
   const [sendRoundStart, onRoundStart] = room.makeAction('round-start');
-  const [sendRoundEnd, onRoundEnd] = room.makeAction('round-end');
   const [sendResults, onResults] = room.makeAction('results');
   const [sendConfig, onConfig] = room.makeAction('config');
 
@@ -218,34 +189,29 @@ function initRoom(isHost, roomCode) {
     presence: sendPresence,
     answers: sendAnswers,
     roundStart: sendRoundStart,
-    roundEnd: sendRoundEnd,
     results: sendResults,
     config: sendConfig,
   };
 
-  // --- Gestione presenze ---
   function announcePresence() {
-    sendPresence({ name: state.playerName, isHost: state.isHost, peerId: state.myPeerId });
+    sendPresence({ name: state.playerName, isHost: state.isHost });
   }
 
   onPresence((data, peerId) => {
     state.peers.set(peerId, {
       name: data.name,
       isHost: data.isHost,
-      peerId: data.peerId,
       ready: false,
       answers: null,
     });
     renderPlayers();
-    // Rispondi con la propria presenza se non l'hai ancora fatto
     if (state.isHost) {
-      // L'host invia anche la configurazione corrente
       sendConfig({ config: state.config }, peerId);
     }
     announcePresence();
   });
 
-  onConfig((data, peerId) => {
+  onConfig((data) => {
     if (!state.isHost) {
       state.config = data.config;
       applyConfigToUI();
@@ -255,7 +221,6 @@ function initRoom(isHost, roomCode) {
   room.onPeerJoin(peerId => {
     console.log('Peer joined:', peerId);
     dom.connDot.classList.add('online');
-    // Invia subito la presenza al nuovo arrivato
     setTimeout(announcePresence, 300);
   });
 
@@ -269,7 +234,6 @@ function initRoom(isHost, roomCode) {
     }
   });
 
-  // --- Risposte dei client (ricevute dall'host) ---
   onAnswers((data, peerId) => {
     if (!state.isHost) return;
     const peer = state.peers.get(peerId);
@@ -278,45 +242,28 @@ function initRoom(isHost, roomCode) {
       peer.ready = true;
     }
     renderPlayers();
-    checkAllReady();
   });
 
-  // --- Avvio round (ricevuto dai client) ---
   onRoundStart((data) => {
-    if (state.isHost) return; // l'host ha già avviato localmente
+    if (state.isHost) return;
     startRoundLocal(data);
   });
 
-  // --- Fine round (ricevuto dai client) ---
-  onRoundEnd((data) => {
-    if (state.isHost) return;
-    // I client ricevono i risultati tramite l'azione 'results'
-  });
-
-  // --- Risultati (ricevuti dai client) ---
   onResults((data) => {
     if (state.isHost) return;
     renderResults(data.results);
     showScreen('results');
   });
 
-  // Invia la presenza iniziale
   setTimeout(announcePresence, 500);
-
-  // Se client, richiedi configurazione all'host
-  if (!state.isHost) {
-    setTimeout(() => {
-      // La richiesta avviene implicitamente con announcePresence
-    }, 800);
-  }
 }
 
 // ------------------------------------------------------------
 // LOBBY — AZIONI
 // ------------------------------------------------------------
 dom.btnCreateRoom.addEventListener('click', () => {
+  ensurePlayerName();
   const code = generateRoomCode();
-  // Aggiorna URL senza ricaricare
   const url = new URL(window.location);
   url.searchParams.set('room', code);
   window.history.pushState({}, '', url);
@@ -324,6 +271,7 @@ dom.btnCreateRoom.addEventListener('click', () => {
 });
 
 dom.btnJoinRoom.addEventListener('click', () => {
+  ensurePlayerName();
   const code = dom.inputRoomCode.value.trim().toUpperCase();
   if (!code) { showToast('Inserisci un codice stanza'); return; }
   const url = new URL(window.location);
@@ -332,14 +280,12 @@ dom.btnJoinRoom.addEventListener('click', () => {
   initRoom(false, code);
 });
 
-// Condivisione via SMS
 dom.btnShareSms.addEventListener('click', () => {
   const url = `${window.location.origin}${window.location.pathname}?room=${state.roomCode}`;
   const body = encodeURIComponent(`Gioca a Nomi Cose Città! Clicca qui: ${url}`);
   window.location.href = `sms:?&body=${body}`;
 });
 
-// Configurazione extra categories (checkboxes)
 dom.extraCategories.addEventListener('change', () => {
   if (!state.isHost) return;
   const checked = [...dom.extraCategories.querySelectorAll('.chip-check:checked')]
@@ -348,7 +294,6 @@ dom.extraCategories.addEventListener('change', () => {
   broadcastConfig();
 });
 
-// Configurazione timer (radio)
 dom.timerOptions.addEventListener('change', () => {
   if (!state.isHost) return;
   const selected = dom.timerOptions.querySelector('.chip-check:checked');
@@ -363,11 +308,9 @@ function broadcastConfig() {
 }
 
 function applyConfigToUI() {
-  // Aggiorna checkboxes
   for (const cb of dom.extraCategories.querySelectorAll('.chip-check')) {
     cb.checked = state.config.selectedExtras.includes(cb.value);
   }
-  // Aggiorna radio timer
   for (const rb of dom.timerOptions.querySelectorAll('.chip-check')) {
     rb.checked = parseInt(rb.value, 10) === state.config.timerSeconds;
   }
@@ -381,7 +324,6 @@ function renderPlayers() {
     name: state.playerName + ' (tu)',
     isHost: state.isHost,
     ready: state.myReady,
-    id: 'self',
   }];
 
   for (const [peerId, peer] of state.peers) {
@@ -389,11 +331,9 @@ function renderPlayers() {
       name: peer.name,
       isHost: peer.isHost,
       ready: peer.ready,
-      id: peerId,
     });
   }
 
-  // Lobby
   dom.playerCount.textContent = `(${list.length})`;
   dom.playerList.innerHTML = list.map(p => `
     <li>
@@ -404,7 +344,6 @@ function renderPlayers() {
     </li>
   `).join('');
 
-  // Schermata gioco
   if (dom.gamePlayerList) {
     dom.gamePlayerList.innerHTML = list.map(p => `
       <li>
@@ -417,19 +356,12 @@ function renderPlayers() {
   }
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c]));
-}
-
 // ------------------------------------------------------------
 // AVVIO PARTITA (host)
 // ------------------------------------------------------------
 dom.btnStartGame.addEventListener('click', () => {
   if (!state.isHost) return;
 
-  // Genera seed e lettera
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   const letter = pickLetter(seed, state.round.previousLetter);
 
@@ -441,13 +373,10 @@ dom.btnStartGame.addEventListener('click', () => {
   state.round.active = true;
   state.round.previousLetter = letter;
 
-  // Categorie attive: fisse + extra selezionate
   const activeCategories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
 
-  // Prepara UI locale
   prepareGameUI(letter, state.round.number, seed, activeCategories);
 
-  // Notifica i client
   if (state.send) {
     state.send.roundStart({
       letter,
@@ -458,10 +387,23 @@ dom.btnStartGame.addEventListener('click', () => {
     });
   }
 
-  // Avvia timer
   startTimer(state.round.timerSeconds);
   showScreen('game');
 });
+
+function startRoundLocal(data) {
+  state.round.number = data.roundNumber;
+  state.round.letter = data.letter;
+  state.round.seed = data.seed;
+  state.round.timerSeconds = data.timerSeconds;
+  state.round.startTime = Date.now();
+  state.round.active = true;
+  state.round.previousLetter = data.letter;
+
+  prepareGameUI(data.letter, data.roundNumber, data.seed, data.categories);
+  startTimer(data.timerSeconds);
+  showScreen('game');
+}
 
 function prepareGameUI(letter, roundNumber, seed, categories) {
   dom.roundLetter.textContent = letter;
@@ -469,7 +411,6 @@ function prepareGameUI(letter, roundNumber, seed, categories) {
   dom.roundSeed.textContent = `seed: ${seed}`;
   dom.roundTimerBox.classList.remove('warning', 'danger', 'hidden-timer');
 
-  // Genera input per categoria
   dom.categoryInputs.innerHTML = categories.map(cat => `
     <div class="cat-row" data-cat="${escapeHtml(cat)}">
       <div class="cat-top">
@@ -481,13 +422,11 @@ function prepareGameUI(letter, roundNumber, seed, categories) {
     </div>
   `).join('');
 
-  // Reset risposte locali
   state.myAnswers = {};
   state.myReady = false;
   dom.btnDone.disabled = false;
   dom.doneHint.hidden = true;
 
-  // Ascolta input
   for (const input of dom.categoryInputs.querySelectorAll('input')) {
     input.addEventListener('input', (e) => {
       state.myAnswers[e.target.dataset.input] = e.target.value.trim();
@@ -549,10 +488,8 @@ function onRoundTimeUp() {
   stopTimer();
 
   if (state.isHost) {
-    // L'host raccoglie tutte le risposte e calcola i risultati
     collectAndScore();
   } else {
-    // I client inviano le proprie risposte all'host
     if (state.send) {
       state.send.answers({ answers: state.myAnswers });
     }
@@ -560,7 +497,6 @@ function onRoundTimeUp() {
   }
 }
 
-// "Ho finito!" — segna solo il proprio stato
 dom.btnDone.addEventListener('click', () => {
   if (state.myReady) return;
   state.myReady = true;
@@ -570,8 +506,6 @@ dom.btnDone.addEventListener('click', () => {
 
   if (!state.isHost && state.send) {
     state.send.answers({ answers: state.myAnswers });
-  } else if (state.isHost) {
-    // L'host ha già le sue risposte in state.myAnswers
   }
 });
 
@@ -579,25 +513,16 @@ dom.btnDone.addEventListener('click', () => {
 // SCORING (host)
 // ------------------------------------------------------------
 async function collectAndScore() {
-  // Raccogli risposte: proprie + quelle ricevute dai client
   const allAnswers = new Map();
-  allAnswers.set(state.myPeerId, {
-    name: state.playerName,
-    answers: state.myAnswers,
-  });
+  allAnswers.set('self', { name: state.playerName, answers: state.myAnswers });
 
   for (const [peerId, peer] of state.peers) {
-    allAnswers.set(peerId, {
-      name: peer.name,
-      answers: peer.answers || {},
-    });
+    allAnswers.set(peerId, { name: peer.name, answers: peer.answers || {} });
   }
 
-  // Categorie attive
   const categories = [...FIXED_CATEGORIES, ...state.config.selectedExtras];
+  const results = {};
 
-  // Per ogni categoria, verifica le parole
-  const results = {}; // categoria -> [{ playerName, word, valid, points }]
   for (const cat of categories) {
     results[cat] = [];
     for (const [peerId, data] of allAnswers) {
@@ -610,12 +535,11 @@ async function collectAndScore() {
         playerName: data.name,
         word: word,
         valid: valid,
-        points: 0, // calcolato dopo
+        points: 0,
       });
     }
   }
 
-  // Calcola punti: 10 se valida e unica, 5 se valida ma duplicata, 0 se non valida
   for (const cat of categories) {
     const entries = results[cat];
     const wordCounts = {};
@@ -632,12 +556,10 @@ async function collectAndScore() {
     }
   }
 
-  // Invia risultati a tutti
   if (state.send) {
     state.send.results({ results });
   }
 
-  // Mostra risultati localmente
   renderResults(results);
   showScreen('results');
 }
@@ -646,17 +568,13 @@ async function collectAndScore() {
 // VERIFICA PAROLE
 // ------------------------------------------------------------
 async function verifyWord(word, letter) {
-  // Controllo base: inizia con la lettera giusta?
   if (word[0].toUpperCase() !== letter) return false;
 
-  // 1. Prova Wikipedia (italiana)
   try {
     const url = `https://it.wikipedia.org/w/api.php?origin=*&action=opensearch&search=${encodeURIComponent(word)}&limit=5`;
     const res = await fetch(url);
     const data = await res.json();
-    // data[1] = array di titoli suggeriti
     if (data[1] && data[1].length > 0) {
-      // Verifica che ci sia una corrispondenza ragionevole
       const lower = word.toLowerCase();
       const match = data[1].some(t => t.toLowerCase().includes(lower));
       if (match) return true;
@@ -665,7 +583,6 @@ async function verifyWord(word, letter) {
     console.warn('Wikipedia error:', e);
   }
 
-  // 2. Fallback: Worker Gemini
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
@@ -708,17 +625,13 @@ function renderResults(results) {
   }).join('');
 
   dom.resultsContent.innerHTML = html;
-
-  // Pulsante prossimo round (solo host)
   dom.btnNextRound.hidden = !state.isHost;
   dom.btnNextRound.onclick = () => {
     if (!state.isHost) return;
-    // Torna alla lobby di configurazione e riavvia
     state.myReady = false;
     state.myAnswers = {};
     renderPlayers();
     showScreen('lobby');
-    // Il prossimo "Inizia partita" avvierà il round successivo
   };
 }
 
@@ -726,17 +639,13 @@ function renderResults(results) {
 // BOOT
 // ------------------------------------------------------------
 function boot() {
-  initPlayerName();
-
-  // Controlla se c'è ?room= nell'URL
   const params = new URLSearchParams(window.location.search);
   const roomCode = params.get('room');
 
   if (roomCode) {
-    // Client: entra direttamente nella stanza
+    ensurePlayerName();
     initRoom(false, roomCode.toUpperCase());
   } else {
-    // Host: mostra lobby per creare stanza
     showScreen('lobby');
   }
 }
