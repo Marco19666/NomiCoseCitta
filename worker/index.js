@@ -53,6 +53,9 @@ Criteri di validità:
 - deve essere una parola italiana esistente e di senso compiuto;
 - deve appartenere alla categoria richiesta (es. "Città" = città italiana o estera riconosciuta; "Animali" = specie animale; "Mestieri" = professione; "Colori" = colore; "Film" = titolo di film; "Cantanti" = nome d'arte o cognome di cantante; "Sport" = disciplina sportiva; "Cibo" = alimento o piatto; "Cose" = oggetto o concetto concreto; "Nomi" = nome proprio di persona);
 - deve iniziare con la lettera indicata (indipendentemente da maiuscole/minuscole);
+- Valuta il significato comune della parola, non pretendere che sia una voce presente in Wikipedia.
+- Esempi: "daino" è valido per Animali; "Domodossola" è valido per Città; "drago" NON è una cosa comune se la categoria richiede oggetti concreti.
+- Non rifiutare una parola solo perché poco comune o perché non conosci una fonte specifica.
 - NON deve essere una parola inventata, un acronimo privo di senso, una frase, o una parola di una sola lettera.
 Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza punteggiatura aggiuntiva, senza altro testo.`;
 
@@ -93,7 +96,10 @@ Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza 
       const geminiData = await geminiRes.json();
       const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
       const normalized = text.trim().toLowerCase();
-      const valid = normalized.startsWith('sì') || normalized.startsWith('si');
+      // Una risposta vuota o inattesa è un errore di verifica, non un "no".
+      const valid = /^(sì|si)(?:[.!\\s]|$)/i.test(normalized)
+        ? true
+        : /^no(?:[.!\\s]|$)/i.test(normalized) ? false : null;
 
       return new Response(JSON.stringify({ valid }), {
         status: 200,
