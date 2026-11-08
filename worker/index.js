@@ -72,7 +72,6 @@ Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza 
             { role: 'user', parts: [{ text: userPrompt }] }
           ],
           generationConfig: {
-            temperature: 0,
             maxOutputTokens: 5,
           },
         }),
