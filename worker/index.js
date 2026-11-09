@@ -238,15 +238,18 @@ async function suggestWithGemini(letter, categories, difficulty, existing, apiKe
 async function suggestAnswers(letter, categories, difficulty, apiKey) {
   const answers = {};
   const fallback = [];
-  for (const category of categories) {
+  const lookups = await Promise.all(categories.map(async function (category) {
     try {
       const word = await suggestWikidata(letter, category, difficulty, Object.values(answers));
-      if (word) answers[category] = word;
-      else fallback.push(category);
+      return { category: category, word: word || "" };
     } catch (error) {
       console.warn("Wikidata suggestions unavailable for " + category + ":", String(error));
-      fallback.push(category);
+      return { category: category, word: "" };
     }
+  }));
+  for (const result of lookups) {
+    if (result.word) answers[result.category] = result.word;
+    else fallback.push(result.category);
   }
   if (fallback.length && apiKey) {
     try {
