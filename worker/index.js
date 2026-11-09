@@ -118,7 +118,7 @@ Non aggiungere spiegazioni, commenti o punteggiatura.
 
     const geminiUrl =
       'https://generativelanguage.googleapis.com/v1beta/models/' +
-      'gemini-3.5-flash:generateContent';
+      'gemini-3.5-flash-lite:generateContent';
 
     try {
 
