@@ -1,5 +1,5 @@
 // Cloudflare Worker — verifica parole per Nomi Cose Città
-// Wikidata come archivio di conferma + Gemini come fallback semantico.
+// Wikidata (SPARQL ottimizzato) + Gemini come fallback semantico.
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -29,7 +29,8 @@ function jsonResponse(data, status) {
 
 function normalize(value) {
   return String(value || "")
-    .normalize("NFC")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // Rimuove gli accenti per il controllo iniziale
     .trim()
     .replace(/\s+/g, " ")
     .toLocaleLowerCase("it");
@@ -43,42 +44,44 @@ function escapeSparql(value) {
 }
 
 async function lookupWikidata(word, category) {
-  const classes = WIKIDATA_CLASSES[normalize(category)];
+  const normCat = normalize(category);
+  const classes = WIKIDATA_CLASSES[normCat];
   if (!classes) return false;
 
-  const classValues = classes.map(function (id) {
-    return "wd:" + id;
-  }).join(" ");
+  const classValues = classes.map(id => "wd:" + id).join(" ");
+  const cleanWord = String(word).trim().toLowerCase();
 
-  const query = [
-    "SELECT ?item WHERE {",
-    " VALUES ?class { " + classValues + " }",
-    " ?item wdt:P31/wdt:P279* ?class; rdfs:label ?label.",
-    ' FILTER(LCASE(STR(?label)) = LCASE("' + escapeSparql(word) + '"))',
-    ' FILTER(LANG(?label) = "it" || LANG(?label) = "en")',
-    "} LIMIT 1"
-  ].join("\n");
+  // SPARQL ottimizzato: cerca il binding esatto della label prima del traversal della classe
+  const query = `
+    SELECT ?item WHERE {
+      VALUES ?class { ${classValues} }
+      ?item rdfs:label "${escapeSparql(cleanWord)}"@it .
+      ?item wdt:P31/wdt:P279* ?class .
+    } LIMIT 1
+  `;
 
-  const cacheUrl = "https://ncc-cache.invalid/wikidata/" +
-    encodeURIComponent(normalize(category)) + "/" +
-    encodeURIComponent(normalize(word));
+  // URL sintetico ma valido per la Cache API di Cloudflare
+  const cacheUrl = `https://cache.nomicosecitta.internal/wikidata/${encodeURIComponent(normCat)}/${encodeURIComponent(cleanWord)}`;
   const cacheKey = new Request(cacheUrl);
   const cache = caches.default;
-  const cached = await cache.match(cacheKey);
 
-  if (cached) {
-    const cachedData = await cached.json();
-    return cachedData.found === true;
+  try {
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      const cachedData = await cached.json();
+      return cachedData.found === true;
+    }
+  } catch (e) {
+    // Prosegue se la cache fallisce
   }
 
-  const endpoint = "https://query.wikidata.org/sparql?query=" +
-    encodeURIComponent(query);
+  const endpoint = "https://query.wikidata.org/sparql?query=" + encodeURIComponent(query);
   const response = await fetch(endpoint, {
     headers: {
       "Accept": "application/sparql-results+json",
-      "User-Agent": "NomiCoseCitta/1.0"
+      "User-Agent": "NomiCoseCittaBot/2.0 (https://nomicosecitta.app)"
     },
-    signal: AbortSignal.timeout(7000)
+    signal: AbortSignal.timeout(5000)
   });
 
   if (!response.ok) {
@@ -86,42 +89,39 @@ async function lookupWikidata(word, category) {
   }
 
   const result = await response.json();
-  const bindings = result && result.results && result.results.bindings;
+  const bindings = result?.results?.bindings;
   const found = Array.isArray(bindings) && bindings.length > 0;
 
-  await cache.put(cacheKey, new Response(JSON.stringify({ found: found }), {
-    headers: {
-      "Cache-Control": "public, max-age=604800",
-      "Content-Type": "application/json"
-    }
-  }));
+  // Salva in cache il risultato (valido 7 giorni)
+  try {
+    await cache.put(cacheKey, new Response(JSON.stringify({ found }), {
+      headers: {
+        "Cache-Control": "public, max-age=604800",
+        "Content-Type": "application/json"
+      }
+    }));
+  } catch (e) {}
 
   return found;
 }
 
 async function verifyWithGemini(word, letter, category, apiKey) {
   const instructions = [
-    'Sei il giudice semantico del gioco italiano "Nomi Cose Città".',
-    "Valuta con rigore uso comune italiano, categoria e lettera iniziale.",
-    "La parola deve essere reale, riconoscibile e appartenere alla categoria.",
-    "Nomi: nome proprio di persona, non cognome.",
-    "Città: città o centro abitato riconosciuto.",
-    "Cose: oggetto concreto e identificabile.",
-    "Animali: animale; Piante: pianta; Mestieri: professione.",
-    "Sport: disciplina sportiva; Alimenti: cibo o bevanda non alcolica.",
-    "Per categorie personalizzate interpreta il significato ordinario.",
-    "Non inventare significati e non accettare refusi evidenti.",
-    "Se non puoi decidere con sicurezza, usa uncertain.",
-    'Rispondi esclusivamente JSON: {"status":"valid"}, {"status":"invalid"} oppure {"status":"uncertain"}.'
+    'Sei il giudice arbitro del gioco "Nomi Cose Città".',
+    'Rispondi ESCLUSIVAMENTE con un oggetto JSON valido.',
+    'Formato ammesso: {"status":"valid"}, {"status":"invalid"} o {"status":"uncertain"}.',
+    'Regole:',
+    '- Verifica che la parola inizi con la lettera richiesta.',
+    '- Verifica che la parola sia reale in italiano e appartenga alla categoria.',
+    '- Nomi: solo nomi propri di persona.',
+    '- Città: comuni o città reali.',
+    '- Non accettare errori grammaticali o refusi evidenti.'
   ].join("\n");
 
-  const prompt = "Categoria: " + category +
-    "\nLettera richiesta: " + letter +
-    "\nRisposta: " + word +
-    "\nControlla lettera iniziale, significato e categoria.";
+  const prompt = `Categoria: ${category}\nLettera richiesta: ${letter}\nParola: ${word}`;
 
-  const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" +
-    encodeURIComponent(apiKey);
+  // Utilizzo del modello raccomandato ed efficiente Gemini 2.0 Flash
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const response = await fetch(endpoint, {
     method: "POST",
@@ -130,11 +130,11 @@ async function verifyWithGemini(word, letter, category, apiKey) {
       systemInstruction: { parts: [{ text: instructions }] },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
-        maxOutputTokens: 40,
+        maxOutputTokens: 30,
         responseMimeType: "application/json"
       }
     }),
-    signal: AbortSignal.timeout(12000)
+    signal: AbortSignal.timeout(8000)
   });
 
   if (!response.ok) {
@@ -142,22 +142,17 @@ async function verifyWithGemini(word, letter, category, apiKey) {
   }
 
   const data = await response.json();
-  let responseText = "";
-  if (data && data.candidates && data.candidates[0] &&
-      data.candidates[0].content && data.candidates[0].content.parts &&
-      data.candidates[0].content.parts[0]) {
-    responseText = data.candidates[0].content.parts[0].text || "";
-  }
+  const responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
   try {
-    const parsed = JSON.parse(responseText.trim());
-    if (parsed.status === "valid" ||
-        parsed.status === "invalid" ||
-        parsed.status === "uncertain") {
+    // Pulizia da eventuale wrapping Markdown ```json ... ```
+    const cleanJson = responseText.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(cleanJson);
+    if (["valid", "invalid", "uncertain"].includes(parsed.status)) {
       return parsed.status;
     }
   } catch (error) {
-    // Risposta del modello non interpretabile: viene trattata come incerta.
+    console.warn("Parsing Gemini fallito:", responseText);
   }
 
   return "uncertain";
@@ -181,19 +176,22 @@ export default {
     }
 
     const word = String(body.word || "").trim();
-    const letter = String(body.letter || "").trim().toLocaleUpperCase("it");
+    const letter = String(body.letter || "").trim().toUpperCase();
     const category = String(body.category || "").trim();
 
     if (!word || !letter || !category) {
       return jsonResponse({ error: "Missing word, letter or category" }, 400);
     }
 
-    if (word.length > 80 || category.length > 60 || letter.length > 3) {
+    if (word.length > 80 || category.length > 60 || letter.length > 2) {
       return jsonResponse({ error: "Input too long" }, 400);
     }
 
-    if (word.length < 2 ||
-        normalize(word).charAt(0).toLocaleUpperCase("it") !== letter) {
+    // Normalizzazione senza accenti per verificare l'iniziale della parola
+    const normalizedWord = normalize(word);
+    const normalizedLetter = normalize(letter);
+
+    if (word.length < 2 || !normalizedWord.startsWith(normalizedLetter)) {
       return jsonResponse({
         valid: false,
         status: "invalid",
@@ -201,6 +199,7 @@ export default {
       }, 200);
     }
 
+    // 1. Controllo primario: Wikidata
     try {
       const databaseMatch = await lookupWikidata(word, category);
       if (databaseMatch) {
@@ -211,9 +210,10 @@ export default {
         }, 200);
       }
     } catch (error) {
-      console.warn("Wikidata lookup unavailable:", String(error));
+      console.warn("Wikidata lookup non disponibile:", String(error));
     }
 
+    // 2. Controllo secondario: Gemini (Fallback)
     if (!env || !env.GEMINI_API_KEY) {
       return jsonResponse({
         valid: null,
@@ -223,9 +223,7 @@ export default {
     }
 
     try {
-      const status = await verifyWithGemini(
-        word, letter, category, env.GEMINI_API_KEY
-      );
+      const status = await verifyWithGemini(word, letter, category, env.GEMINI_API_KEY);
       let valid = null;
       if (status === "valid") valid = true;
       if (status === "invalid") valid = false;
@@ -236,7 +234,7 @@ export default {
         source: "gemini"
       }, 200);
     } catch (error) {
-      console.error("Gemini verification failed:", String(error));
+      console.error("Verifica Gemini fallita:", String(error));
       return jsonResponse({
         valid: null,
         status: "uncertain",
