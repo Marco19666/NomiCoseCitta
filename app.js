@@ -222,7 +222,8 @@ function initRoom(isHost, roomCode) {
     });
     renderPlayers();
     if (S.isHost) sendConfig({ config: S.config }, peerId);
-    announce();
+    // Non rispondere a ogni presence con un'altra presence:
+    // peerJoin e l'annuncio iniziale gestiscono già la scoperta dei giocatori.
   });
 
   onConfig((data) => {
@@ -475,6 +476,10 @@ D.btnStart.addEventListener('click', () => {
 });
 
 function hostStartRound() {
+  if (S.round.num >= S.config.rounds) {
+    toast('La partita è terminata: avvia una nuova partita.');
+    return;
+  }
   if (S.usedLetters.length >= ALPHABET.length) {
     toast('Sono state utilizzate tutte le lettere disponibili. Avvia una nuova partita.');
     return;
