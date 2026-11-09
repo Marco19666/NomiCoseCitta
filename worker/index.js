@@ -15,7 +15,6 @@ const WIKIDATA_CLASSES = {
   "mestieri": ["Q12737077"],
   "sport": ["Q349"],
   "alimenti": ["Q2095"],
-  "cibo": ["Q2095"],
   "cose": ["Q223557"]
 };
 
@@ -164,104 +163,6 @@ async function verifyWithGemini(word, letter, category, apiKey) {
   return "uncertain";
 }
 
-
-async function suggestWikidata(letter, category, difficulty, exclude) {
-  const classes = WIKIDATA_CLASSES[normalize(category)];
-  if (!classes) return "";
-  const classValues = classes.map(id => "wd:" + id).join(" ");
-  const query = [
-    "SELECT DISTINCT ?label WHERE {",
-    " VALUES ?class { " + classValues + " }",
-    " ?item wdt:P31/wdt:P279* ?class; rdfs:label ?label.",
-    ' FILTER(LANG(?label) = "it")',
-    ' FILTER(STRSTARTS(LCASE(STR(?label)), LCASE("' + escapeSparql(letter) + '")))',
-    "} LIMIT 80"
-  ].join("\n");
-  const endpoint = "https://query.wikidata.org/sparql?query=" + encodeURIComponent(query);
-  const response = await fetch(endpoint, {
-    headers: { "Accept": "application/sparql-results+json", "User-Agent": "NomiCoseCitta/1.0" },
-    signal: AbortSignal.timeout(9000)
-  });
-  if (!response.ok) throw new Error("Wikidata HTTP " + response.status);
-  const data = await response.json();
-  const blocked = new Set((exclude || []).map(normalize));
-  const words = (data.results?.bindings || [])
-    .map(row => row.label?.value || "")
-    .filter(word => word && word.length <= 70 && !blocked.has(normalize(word)));
-  if (!words.length) return "";
-  if (difficulty === "easy") {
-    words.sort((a,b) => a.length - b.length);
-    return words[Math.floor(Math.random() * Math.min(8, words.length))];
-  }
-  if (difficulty === "hard") {
-    words.sort((a,b) => b.length - a.length);
-    return words[Math.floor(Math.random() * Math.min(12, words.length))];
-  }
-  return words[Math.floor(Math.random() * words.length)];
-}
-
-async function suggestWithGemini(letter, categories, difficulty, existing, apiKey) {
-  if (!categories.length || !apiKey) return {};
-  const level = difficulty === "easy" ? "molto comuni e facili" :
-    difficulty === "hard" ? "meno scontate ma corrette, note e verificabili" : "di difficoltà media, conosciute ma non banali";
-  const prompt = [
-    'Gioca a "Nomi Cose Città" in italiano.',
-    "Genera una sola risposta reale per ciascuna categoria, iniziando ESATTAMENTE con la lettera " + letter + ".",
-    "Difficoltà: " + level + ".",
-    "Categorie: " + JSON.stringify(categories) + ".",
-    "Non ripetere queste risposte già assegnate: " + JSON.stringify(existing || {}) + ".",
-    "Usa parole o nomi riconoscibili, non inventare e non aggiungere spiegazioni.",
-    'Rispondi esclusivamente con un oggetto JSON le cui chiavi sono le categorie e i valori le risposte.'
-  ].join("\n");
-  const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + encodeURIComponent(apiKey);
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 500, responseMimeType: "application/json" }
-    }),
-    signal: AbortSignal.timeout(15000)
-  });
-  if (!response.ok) throw new Error("Gemini HTTP " + response.status);
-  const data = await response.json();
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-  const parsed = JSON.parse(raw.trim());
-  const answers = {};
-  for (const category of categories) {
-    const word = String(parsed[category] || "").trim().slice(0, 70);
-    if (word && normalize(word).charAt(0).toLocaleUpperCase("it") === letter) answers[category] = word;
-  }
-  return answers;
-}
-
-async function suggestAnswers(letter, categories, difficulty, apiKey) {
-  const answers = {};
-  const fallback = [];
-  const lookups = await Promise.all(categories.map(async function (category) {
-    try {
-      const word = await suggestWikidata(letter, category, difficulty, Object.values(answers));
-      return { category: category, word: word || "" };
-    } catch (error) {
-      console.warn("Wikidata suggestions unavailable for " + category + ":", String(error));
-      return { category: category, word: "" };
-    }
-  }));
-  for (const result of lookups) {
-    if (result.word) answers[result.category] = result.word;
-    else fallback.push(result.category);
-  }
-  if (fallback.length && apiKey) {
-    try {
-      const generated = await suggestWithGemini(letter, fallback, difficulty, answers, apiKey);
-      Object.assign(answers, generated);
-    } catch (error) {
-      console.warn("Gemini suggestions unavailable:", String(error));
-    }
-  }
-  return answers;
-}
-
 export default {
   fetch: async function (request, env) {
     if (request.method === "OPTIONS") {
@@ -277,17 +178,6 @@ export default {
       body = await request.json();
     } catch (error) {
       return jsonResponse({ error: "Invalid JSON" }, 400);
-    }
-
-    if (body.action === "suggest") {
-      const suggestionLetter = String(body.letter || "").trim().toLocaleUpperCase("it");
-      const categories = Array.isArray(body.categories) ? body.categories.slice(0, 12).map(v => String(v).trim()).filter(v => v && v.length <= 60) : [];
-      const difficulty = ["easy", "medium", "hard"].includes(body.difficulty) ? body.difficulty : "medium";
-      if (!/^[A-Z]$/.test(suggestionLetter) || !categories.length) {
-        return jsonResponse({ error: "Invalid letter or categories" }, 400);
-      }
-      const answers = await suggestAnswers(suggestionLetter, categories, difficulty, env && env.GEMINI_API_KEY);
-      return jsonResponse({ answers: answers, source: "wikidata+gemini" }, 200);
     }
 
     const word = String(body.word || "").trim();
