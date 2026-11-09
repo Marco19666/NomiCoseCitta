@@ -1,6 +1,5 @@
 // ============================================================
-// Cloudflare Worker — verifica parole con Cloudflare Workers AI
-// Modello: GLM-4.7-Flash
+// Cloudflare Worker — Gemini 3.5 Flash-Lite come arbitro
 // ============================================================
 
 const corsHeaders = {
@@ -12,10 +11,7 @@ const corsHeaders = {
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'application/json',
-    },
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 }
 
@@ -24,7 +20,6 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
-
     if (request.method !== 'POST') {
       return jsonResponse({ error: 'Method not allowed' }, 405);
     }
@@ -40,78 +35,88 @@ export default {
     const letter = String(body?.letter || '').trim().toUpperCase();
     const category = String(body?.category || 'Cose').trim();
 
-    if (!word || !letter) {
-      return jsonResponse({ error: 'Missing word or letter' }, 400);
-    }
-
-    if (letter.length !== 1 || word.length < 2) {
+    if (!word || !letter || letter.length !== 1 || word.length < 2) {
       return jsonResponse({ valid: false });
     }
 
-    if (word[0].toLocaleUpperCase('it-IT') !== letter) {
+    if (word[0].toUpperCase() !== letter) {
       return jsonResponse({ valid: false });
     }
 
-    if (!env.AI) {
-      return jsonResponse({
-        error: 'Cloudflare Workers AI binding not configured',
-      }, 503);
+    const apiKey = env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return jsonResponse({ error: 'GEMINI_API_KEY not configured' }, 500);
     }
 
-    const prompt = `
-Sei un verificatore per il gioco italiano "Nomi, Cose e Città".
-Decidi se la parola indicata esiste realmente e appartiene alla categoria indicata.
-Deve iniziare con la lettera richiesta.
-Per "Città" accetta città italiane e straniere riconosciute.
-Per "Nomi" accetta nomi propri di persona.
-Per "Cose" accetta oggetti e cose concrete.
-Per le altre categorie valuta il significato comune.
-Non essere eccessivamente restrittivo: accetta anche parole corrette poco comuni.
-Rispondi esclusivamente con sì oppure no, senza spiegazioni.
+    const systemInstruction = `Sei l'arbitro del gioco italiano "Nomi Cose Città".
+Decidi se la parola "${word}" è valida come "${category}" e inizia con la lettera "${letter}".
+Regole:
+- La parola deve essere italiana, esistente e di senso compiuto.
+- Deve appartenere alla categoria "${category}".
+- Deve iniziare con la lettera "${letter}".
+- Non sono valide: parole inventate, frasi, acronimi senza senso.
+Rispondi SOLO con "sì" o "no". Nessun'altra parola.`;
 
-Parola: "${word}"
-Categoria: "${category}"
-Lettera richiesta: "${letter}"
-La parola è valida?
-`.trim();
+    const userPrompt = `Parola: "${word}"\nCategoria: "${category}"\nLettera: "${letter}"\nÈ valida?`;
+
+    // Modello corretto: gemini-3.5-flash-lite (non 3.6-flash-lite che non esiste)
+    const geminiUrl =
+      'https://generativelanguage.googleapis.com/v1beta/models/' +
+      'gemini-3.5-flash-lite:generateContent';
 
     try {
-      const result = await env.AI.run('@cf/zai-org/glm-4.7-flash', {
-        prompt,
-        max_completion_tokens: 8,
-        temperature: 0,
+      const geminiRes = await fetch(`${geminiUrl}?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+          generationConfig: {
+            // 3.5 Flash-Lite supporta thinkingLevel con MINIMAL (default) o LOW
+            thinkingConfig: { thinkingLevel: 'MINIMAL' },
+            maxOutputTokens: 16,
+          },
+        }),
       });
 
-      const rawText =
-        result?.choices?.[0]?.message?.content ??
-        result?.response ??
-        '';
-
-      const responseText = String(rawText)
-        .trim()
-        .toLocaleLowerCase('it-IT')
-        .normalize('NFC')
-        .replace(/[.!]+$/g, '')
-        .trim();
-
-      if (responseText === 'sì' || responseText === 'si') {
-        return jsonResponse({ valid: true });
+      if (!geminiRes.ok) {
+        const errText = await geminiRes.text();
+        return jsonResponse({
+          error: 'Gemini API error',
+          status: geminiRes.status,
+          detail: errText.slice(0, 300),
+        }, 502);
       }
 
-      if (responseText === 'no') {
+      const geminiData = await geminiRes.json();
+      const candidate = geminiData?.candidates?.[0];
+      const parts = candidate?.content?.parts || [];
+      const responseText = parts.map(p => p.text || '').join('').trim().toLowerCase();
+
+      if (!responseText) {
+        return jsonResponse({
+          error: 'Gemini returned empty response',
+          finishReason: candidate?.finishReason || 'UNKNOWN',
+        }, 502);
+      }
+
+      const normalized = responseText.replace(/[.!]+$/g, '').trim();
+
+      if (normalized === 'sì' || normalized === 'si') {
+        return jsonResponse({ valid: true });
+      }
+      if (normalized === 'no') {
         return jsonResponse({ valid: false });
       }
 
+      // Risposta inattesa: la trattiamo come non valida, ma logghiamo
       return jsonResponse({
-        error: 'Unexpected Cloudflare AI response',
-        response: responseText.slice(0, 200),
-        modelOutput: result,
-      }, 502);
+        valid: false,
+        warning: 'Unexpected Gemini response',
+        raw: responseText.slice(0, 50),
+      });
     } catch (error) {
-      return jsonResponse({
-        error: 'Cloudflare Workers AI error',
-        detail: String(error).slice(0, 500),
-      }, 502);
+      return jsonResponse({ error: 'Fetch failed', detail: String(error) }, 500);
     }
   },
 };
