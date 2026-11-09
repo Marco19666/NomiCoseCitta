@@ -258,7 +258,8 @@ async function suggestAnswers(letter, categories, difficulty, apiKey) {
   }
   return answers;
 }
-\nexport default {
+
+export default {
   fetch: async function (request, env) {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
