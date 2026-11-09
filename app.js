@@ -384,7 +384,16 @@ function renderPlayers() {
 // AVVIO MANCHE
 // ------------------------------------------------------------
 D.btnStart.addEventListener('click', () => {
-  if (S.isHost) hostStartRound();
+  if (!S.isHost) {
+    toast('Solo chi ha creato la stanza può avviare la partita.');
+    return;
+  }
+  try {
+    hostStartRound();
+  } catch (error) {
+    console.error('Errore avvio partita:', error);
+    toast('Impossibile avviare: ' + (error?.message || error), 6000);
+  }
 });
 
 function hostStartRound() {
@@ -403,10 +412,24 @@ function hostStartRound() {
 
   const cats = activeCategories();
 
+  // Avvia prima la schermata locale: la partita dell'host non deve
+  // dipendere dalla disponibilità momentanea del canale multiplayer.
   prepareGameUI(letter, S.round.num, seed, cats);
-  S.send.roundStart({ letter, num: S.round.num, seed, timer: S.round.timer, categories: cats });
   runTimer(S.round.timer);
   showScreen('game');
+
+  // Poi comunica l'avvio agli altri giocatori. Se l'invio fallisce,
+  // l'host resta comunque nella partita e vede un messaggio esplicito.
+  try {
+    if (typeof S.send.roundStart === 'function') {
+      S.send.roundStart({ letter, num: S.round.num, seed, timer: S.round.timer, categories: cats });
+    } else {
+      toast('Partita avviata sul dispositivo host, ma invio agli altri non disponibile.', 5000);
+    }
+  } catch (error) {
+    console.error('Errore invio round-start:', error);
+    toast('Partita avviata qui; problema nel collegamento agli altri giocatori.', 5000);
+  }
 }
 
 function clientStartRound(data) {
