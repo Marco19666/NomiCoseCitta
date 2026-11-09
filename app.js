@@ -512,14 +512,29 @@ function stopTimer() {
 }
 
 // ------------------------------------------------------------
+// STATO DI ATTESA RISULTATI
+// ------------------------------------------------------------
+function showWaitingForResults() {
+  if (D.btnDone) {
+    D.btnDone.disabled = true;
+    D.btnDone.textContent = 'In attesa dei risultati...';
+  }
+  if (D.doneHint) {
+    D.doneHint.textContent = 'Manche terminata. In attesa dei risultati...';
+    D.doneHint.hidden = false;
+  }
+  D.categoryInputs?.querySelectorAll('input').forEach(input => {
+    input.disabled = true;
+  });
+}
+
+// ------------------------------------------------------------
 // HO FINITO!
 // ------------------------------------------------------------
 D.btnDone.addEventListener('click', () => {
   if (S.ready) return;
   S.ready = true;
-  D.btnDone.disabled = true;
-  D.btnDone.textContent = 'In attesa...';
-  D.doneHint.hidden = false;
+  showWaitingForResults();
   renderPlayers();
 
   stopTimer();
@@ -574,8 +589,12 @@ function onTimeUp() {
   if (S.isHost) {
     scoreRound();
   } else {
+    S.round.remaining = 0;
+    S.ready = true;
+    showWaitingForResults();
     if (S.send.answers) S.send.answers({ name: S.name, answers: S.answers });
-    toast('Tempo scaduto, attendo i risultati...');
+    if (S.send.done) S.send.done({ name: S.name, answers: S.answers });
+    toast('Tempo scaduto: in attesa dei risultati...');
   }
 }
 
