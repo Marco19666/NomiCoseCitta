@@ -43,6 +43,7 @@ const S = {
   ready: false,
 
   scores: new Map(),
+  personalGameSaved: false,
 
   forceCloseTimeout: null,
 };
@@ -299,6 +300,7 @@ function initRoom(isHost, roomCode) {
   onResults((data) => {
     if (S.isHost) return;
     if (Array.isArray(data.scores)) S.scores = new Map(data.scores);
+    if (data.isLast) recordPersonalGameStats();
     renderStandings();
     renderResults(data.results, data.bonuses || {});
     D.resultsTitle.textContent = data.isLast ? 'Classifica finale' : 'Risultati manche';
@@ -729,6 +731,7 @@ async function scoreRound() {
   }
 
   const isLast = S.round.num >= S.config.rounds;
+  if (isLast) recordPersonalGameStats();
 
   if (S.send.results) {
     S.send.results({ results, bonuses, scores: [...S.scores.entries()], isLast });
@@ -777,6 +780,48 @@ async function askGemini(word, letter, category) {
 // ------------------------------------------------------------
 // RENDER RISULTATI E CLASSIFICA
 // ------------------------------------------------------------
+const PERSONAL_STATS_KEY = 'ncc_personal_stats_v1';
+
+function renderPersonalStats() {
+  const el = $('personalStats');
+  if (!el) return;
+  let stats = {};
+  try { stats = JSON.parse(localStorage.getItem(PERSONAL_STATS_KEY) || '{}'); } catch (_) {}
+  const games = Number(stats.games) || 0;
+  if (!games) {
+    el.innerHTML = '<p class="muted">Le tue statistiche personali appariranno qui dopo la prima partita.</p>';
+    return;
+  }
+  el.innerHTML = `<div class="stats-grid">
+    <div><strong>${games}</strong><span>Partite</span></div>
+    <div><strong>${Number(stats.wins) || 0}</strong><span>Vittorie</span></div>
+    <div><strong>${Number(stats.draws) || 0}</strong><span>Pareggi</span></div>
+    <div><strong>${Number(stats.points) || 0}</strong><span>Punti totali</span></div>
+  </div>`;
+}
+
+function recordPersonalGameStats() {
+  if (S.personalGameSaved || !S.scores.size) return;
+  const mine = [...S.scores.values()].find(p => normName(p.name) === normName(S.name));
+  if (!mine) return;
+  const values = [...S.scores.values()];
+  const best = Math.max(...values.map(p => Number(p.total) || 0));
+  const tied = values.filter(p => (Number(p.total) || 0) === best);
+  let stats = {};
+  try { stats = JSON.parse(localStorage.getItem(PERSONAL_STATS_KEY) || '{}'); } catch (_) {}
+  stats.games = (Number(stats.games) || 0) + 1;
+  stats.points = (Number(stats.points) || 0) + (Number(mine.total) || 0);
+  if ((Number(mine.total) || 0) === best && tied.length === 1) stats.wins = (Number(stats.wins) || 0) + 1;
+  else if ((Number(mine.total) || 0) === best) stats.draws = (Number(stats.draws) || 0) + 1;
+  try {
+    localStorage.setItem(PERSONAL_STATS_KEY, JSON.stringify(stats));
+    S.personalGameSaved = true;
+    renderPersonalStats();
+  } catch (e) {
+    console.warn('Impossibile salvare le statistiche personali', e);
+  }
+}
+
 function renderStandings() {
   if (!D.standings) return;
   const arr = [...S.scores.values()].sort((a, b) => b.total - a.total);
@@ -822,6 +867,7 @@ function resetForNewGame() {
   S.cpuAnswers = {};
   S.ready = false;
   S.scores.clear();
+  S.personalGameSaved = false;
   for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
   D.btnNext.hidden = true;
   if (D.btnNewGame) D.btnNewGame.hidden = true;
@@ -851,6 +897,7 @@ D.btnNext.addEventListener('click', () => {
 // BOOT
 // ------------------------------------------------------------
 (function boot() {
+  renderPersonalStats();
   if (D.inputName) {
     const saved = localStorage.getItem(STORAGE_NAME);
     if (saved) D.inputName.value = saved;
