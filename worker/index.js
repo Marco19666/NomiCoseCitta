@@ -48,33 +48,49 @@ export default {
       return jsonResponse({ error: 'GEMINI_API_KEY not configured' }, 500);
     }
 
+    // Prompt semplificato: l'output strutturato JSON è già vincolato dallo schema,
+    // non è più necessario chiedere al modello di rispondere "sì" o "no".
     const systemInstruction = `Sei l'arbitro del gioco italiano "Nomi Cose Città".
 Decidi se la parola "${word}" è valida come "${category}" e inizia con la lettera "${letter}".
 Regole:
 - La parola deve essere italiana, esistente e di senso compiuto.
 - Deve appartenere alla categoria "${category}".
 - Deve iniziare con la lettera "${letter}".
-- Non sono valide: parole inventate, frasi, acronimi senza senso.
-Rispondi SOLO con "sì" o "no". Nessun'altra parola.`;
+- Non sono valide: parole inventate, frasi, acronimi senza senso.`;
 
     const userPrompt = `Parola: "${word}"\nCategoria: "${category}"\nLettera: "${letter}"\nÈ valida?`;
 
-    // Modello corretto: gemini-3.5-flash-lite (non 3.6-flash-lite che non esiste)
     const geminiUrl =
       'https://generativelanguage.googleapis.com/v1beta/models/' +
       'gemini-3.5-flash-lite:generateContent';
 
     try {
-      const geminiRes = await fetch(`${geminiUrl}?key=${encodeURIComponent(apiKey)}`, {
+      const geminiRes = await fetch(geminiUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Correzione 1: la chiave API passa tramite header, non tramite URL ?key=
+          'x-goog-api-key': apiKey,
+        },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemInstruction }] },
           contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
           generationConfig: {
-            // 3.5 Flash-Lite supporta thinkingLevel con MINIMAL (default) o LOW
+            // Correzione 2: alzare maxOutputTokens per evitare che il thinking "consumi"
+            // il budget e lasci la risposta vuota. 64 è sufficiente e sicuro.
+            maxOutputTokens: 64,
+            // Correzione 3: usare Structured Outputs per forzare il modello a restituire JSON
+            // con un campo booleano, eliminando la fragilità del parsing testuale di "sì"/"no".
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'OBJECT',
+              properties: {
+                valid: { type: 'BOOLEAN' },
+              },
+              required: ['valid'],
+            },
+            // 3.5 Flash-Lite supporta thinking, MINIMAL è adatto per classificazioni semplici
             thinkingConfig: { thinkingLevel: 'MINIMAL' },
-            maxOutputTokens: 16,
           },
         }),
       });
@@ -91,7 +107,7 @@ Rispondi SOLO con "sì" o "no". Nessun'altra parola.`;
       const geminiData = await geminiRes.json();
       const candidate = geminiData?.candidates?.[0];
       const parts = candidate?.content?.parts || [];
-      const responseText = parts.map(p => p.text || '').join('').trim().toLowerCase();
+      const responseText = parts.map(p => p.text || '').join('').trim();
 
       if (!responseText) {
         return jsonResponse({
@@ -100,21 +116,17 @@ Rispondi SOLO con "sì" o "no". Nessun'altra parola.`;
         }, 502);
       }
 
-      const normalized = responseText.replace(/[.!]+$/g, '').trim();
-
-      if (normalized === 'sì' || normalized === 'si') {
-        return jsonResponse({ valid: true });
+      // Correzione 4: parsing diretto del JSON, senza logica di normalizzazione del testo
+      try {
+        const parsed = JSON.parse(responseText);
+        return jsonResponse({ valid: parsed.valid === true });
+      } catch {
+        return jsonResponse({
+          valid: false,
+          warning: 'Unexpected Gemini response format',
+          raw: responseText.slice(0, 100),
+        });
       }
-      if (normalized === 'no') {
-        return jsonResponse({ valid: false });
-      }
-
-      // Risposta inattesa: la trattiamo come non valida, ma logghiamo
-      return jsonResponse({
-        valid: false,
-        warning: 'Unexpected Gemini response',
-        raw: responseText.slice(0, 50),
-      });
     } catch (error) {
       return jsonResponse({ error: 'Fetch failed', detail: String(error) }, 500);
     }
