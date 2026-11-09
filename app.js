@@ -597,7 +597,8 @@ function onTimeUp() {
   showWaitingForResults();
   if (S.isHost) {
     S.ready = true;
-    scoreRound();
+    checkAllReady();
+    scheduleForceClose();
   } else {
     S.round.remaining = 0;
     S.ready = true;
