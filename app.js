@@ -1,80 +1,76 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (v8)
+// NOMI COSE CITTÀ — app.js (v10, senza bonus, senza X)
 // ============================================================
 
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
 
 // ------------------------------------------------------------
-// COSTANTI
+// CONFIGURAZIONE
 // ------------------------------------------------------------
 const APP_ID = 'nomi-cose-citta-v1';
-const ALPHABET = 'ABCDEFGILMNOPRSTUVXZ';
-const STORAGE_KEY_NAME = 'ncc_player_name';
+const ALPHABET = 'ABCDEFGILMNOPRSTUVZ'; // 19 lettere (esclusi H J K Q W X Y)
+const STORAGE_NAME = 'ncc_player_name';
 const FIXED_CATEGORIES = ['Cose', 'Nomi', 'Città'];
-const WORKER_URL = 'https://autumn-glade-9f0e.chiccovision.workers.dev/';
-const STOP_BONUS = 15;
+const WORKER_URL = 'https://muddy-grass-6726.chiccovision.workers.dev';
 
 // ------------------------------------------------------------
 // STATO
 // ------------------------------------------------------------
-const state = {
-  playerName: '',
+const S = {
+  name: '',
   isHost: false,
   roomCode: '',
   room: null,
+  send: {},
   peers: new Map(),
 
-  config: {
-    selectedExtras: [],
-    timerSeconds: 60,
-    totalRounds: 5,
-  },
+  config: { extras: [], timer: 60, rounds: 5 },
 
   round: {
-    number: 0,
+    num: 0,
     letter: '',
-    seed: 0,
-    timerSeconds: 0,
     active: false,
-    previousLetter: '',
+    prevLetter: '',
+    timer: 0,
+    remaining: 0,
   },
+  interval: null,
 
-  myAnswers: {},
-  myReady: false,
-  remainingSeconds: 0,
+  answers: {},
+  ready: false,
 
-  scores: new Map(),
-
-  firstDone: null,
-
-  timerInterval: null,
+  scores: new Map(), // nome -> { name, total }
 };
 
 // ------------------------------------------------------------
 // DOM
 // ------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const dom = {
+const D = {
   screenLobby: $('screenLobby'),
   screenGame: $('screenGame'),
   screenResults: $('screenResults'),
+
   joinCard: $('joinCard'),
   configCard: $('configCard'),
-  inputPlayerName: $('inputPlayerName'),
-  btnCreateRoom: $('btnCreateRoom'),
-  inputRoomCode: $('inputRoomCode'),
-  btnJoinRoom: $('btnJoinRoom'),
-  extraCategories: $('extraCategories'),
-  timerOptions: $('timerOptions'),
-  roundsOptions: $('roundsOptions'),
+  inputName: $('inputPlayerName'),
+  btnCreate: $('btnCreateRoom'),
+  inputCode: $('inputRoomCode'),
+  btnJoin: $('btnJoinRoom'),
+
+  extraCats: $('extraCategories'),
+  timerOpts: $('timerOptions'),
+  roundsOpts: $('roundsOptions'),
   playerList: $('playerList'),
   playerCount: $('playerCount'),
-  btnShareWa: $('btnShareWa'),
-  btnStartGame: $('btnStartGame'),
+  btnShare: $('btnShareWa'),
+  btnStart: $('btnStartGame'),
   hostHint: $('hostHint'),
+
   roomBadge: $('roomBadge'),
   roomCode: $('roomCode'),
   connDot: $('connDot'),
+
   roundLetter: $('roundLetter'),
   roundTimer: $('roundTimer'),
   roundTimerBox: $('roundTimerBox'),
@@ -84,353 +80,261 @@ const dom = {
   btnDone: $('btnDone'),
   doneHint: $('doneHint'),
   gamePlayerList: $('gamePlayerList'),
+
   resultsTitle: $('resultsTitle'),
-  standingsContent: $('standingsContent'),
-  resultsContent: $('resultsContent'),
-  btnNextRound: $('btnNextRound'),
+  standings: $('standingsContent'),
+  results: $('resultsContent'),
+  btnNext: $('btnNextRound'),
+
   toast: $('toast'),
 };
 
 // ------------------------------------------------------------
 // UTILITY
 // ------------------------------------------------------------
-function showToast(msg, duration = 2500) {
-  dom.toast.textContent = msg;
-  dom.toast.hidden = false;
-  dom.toast.classList.add('show');
-  clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => {
-    dom.toast.classList.remove('show');
-    setTimeout(() => { dom.toast.hidden = true; }, 300);
-  }, duration);
+function toast(msg, ms = 2200) {
+  D.toast.textContent = msg;
+  D.toast.hidden = false;
+  D.toast.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => {
+    D.toast.classList.remove('show');
+    setTimeout(() => { D.toast.hidden = true; }, 250);
+  }, ms);
 }
 
-function generateRoomCode() {
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function showScreen(which) {
+  for (const el of [D.screenLobby, D.screenGame, D.screenResults]) {
+    if (el) el.classList.remove('active');
+  }
+  if (which === 'lobby' && D.screenLobby) D.screenLobby.classList.add('active');
+  if (which === 'game' && D.screenGame) D.screenGame.classList.add('active');
+  if (which === 'results' && D.screenResults) D.screenResults.classList.add('active');
+}
+
+function codeRoom() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  const arr = new Uint8Array(6);
-  crypto.getRandomValues(arr);
-  for (const b of arr) code += chars[b % chars.length];
-  return code;
+  const buf = new Uint8Array(6);
+  crypto.getRandomValues(buf);
+  return [...buf].map(b => chars[b % chars.length]).join('');
 }
 
-function seededRandom(seed) {
-  let x = seed >>> 0;
-  if (x === 0) x = 1;
+function seedRandom(seed) {
+  let x = seed >>> 0 || 1;
   x ^= x << 13; x >>>= 0;
   x ^= x >> 17;
   x ^= x << 5;  x >>>= 0;
   return x / 4294967296;
 }
 
-function pickLetter(seed, previousLetter) {
-  const candidates = ALPHABET.split('').filter(l => l !== previousLetter);
-  const r = seededRandom(seed);
-  return candidates[Math.floor(r * candidates.length)];
+function pickLetter(seed, prev) {
+  const pool = ALPHABET.split('').filter(l => l !== prev);
+  return pool[Math.floor(seedRandom(seed) * pool.length)];
 }
 
-function showScreen(name) {
-  for (const s of [dom.screenLobby, dom.screenGame, dom.screenResults]) {
-    if (s) s.classList.remove('active');
-  }
-  if (name === 'lobby' && dom.screenLobby) dom.screenLobby.classList.add('active');
-  if (name === 'game' && dom.screenGame) dom.screenGame.classList.add('active');
-  if (name === 'results' && dom.screenResults) dom.screenResults.classList.add('active');
+function fmt(s) {
+  s = Math.max(0, s);
+  const m = Math.floor(s / 60), r = s % 60;
+  return m > 0 ? `${m}:${String(r).padStart(2, '0')}` : String(r);
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c]));
+function ensureName() {
+  let n = (D.inputName?.value || '').trim();
+  if (!n) n = localStorage.getItem(STORAGE_NAME) || '';
+  if (!n) n = 'Giocatore ' + Math.floor(100 + Math.random() * 900);
+  n = n.slice(0, 20);
+  localStorage.setItem(STORAGE_NAME, n);
+  S.name = n;
+  return n;
 }
 
-function ensurePlayerName() {
-  let name = '';
-  if (dom.inputPlayerName) name = dom.inputPlayerName.value.trim();
-  if (!name) name = localStorage.getItem(STORAGE_KEY_NAME) || '';
-  if (!name) name = 'Giocatore ' + Math.floor(Math.random() * 900 + 100);
-  name = name.slice(0, 20);
-  localStorage.setItem(STORAGE_KEY_NAME, name);
-  state.playerName = name;
-  return name;
-}
-
-// ------------------------------------------------------------
-// CLASSIFICA
-// ------------------------------------------------------------
-function getOrCreateScore(peerKey, name) {
-  if (!state.scores.has(peerKey)) {
-    state.scores.set(peerKey, { name, total: 0, rounds: [], bonusCount: 0 });
-  } else if (name) {
-    state.scores.get(peerKey).name = name;
-  }
-  return state.scores.get(peerKey);
-}
-
-function addRoundScores(pointsByKey) {
-  for (const [key, data] of pointsByKey) {
-    const s = getOrCreateScore(key, data.name);
-    s.total += data.points + (data.bonus || 0);
-    s.rounds.push({ points: data.points, bonus: data.bonus || 0 });
-    if (data.bonus) s.bonusCount += 1;
-  }
-}
-
-function renderStandings() {
-  if (!dom.standingsContent) return;
-  const arr = [...state.scores.entries()]
-    .map(([key, data]) => ({ key, ...data }))
-    .sort((a, b) => b.total - a.total);
-
-  if (arr.length === 0) {
-    dom.standingsContent.innerHTML = '<p class="muted">Nessun punteggio ancora.</p>';
-    return;
-  }
-
-  dom.standingsContent.innerHTML = `<div class="standings">${arr.map((s, i) => `
-    <div class="standing-row ${i === 0 ? 'first' : ''}">
-      <span class="standing-pos">${i + 1}°</span>
-      <span class="standing-name">${escapeHtml(s.name)}</span>
-      <span class="standing-points">${s.total} pt</span>
-      ${s.bonusCount > 0 ? `<span class="standing-bonus">+${s.bonusCount * STOP_BONUS} bonus</span>` : ''}
-    </div>
-  `).join('')}</div>`;
+function activeCategories() {
+  return [...FIXED_CATEGORIES, ...S.config.extras];
 }
 
 // ------------------------------------------------------------
 // TRYSTERO
 // ------------------------------------------------------------
 function initRoom(isHost, roomCode) {
-  state.isHost = isHost;
-  state.roomCode = roomCode;
+  S.isHost = isHost;
+  S.roomCode = roomCode;
+  S.room = joinRoom({ appId: APP_ID }, roomCode);
 
-  const room = joinRoom({ appId: APP_ID }, roomCode);
-  state.room = room;
-
-  if (dom.roomBadge) dom.roomBadge.hidden = false;
-  if (dom.roomCode) dom.roomCode.textContent = roomCode;
-  if (dom.connDot) dom.connDot.classList.add('online');
-  if (dom.joinCard) dom.joinCard.hidden = true;
-  if (dom.configCard) dom.configCard.hidden = false;
-
+  D.roomBadge.hidden = false;
+  D.roomCode.textContent = roomCode;
+  D.connDot.classList.add('online');
+  D.joinCard.hidden = true;
+  D.configCard.hidden = false;
   if (isHost) {
-    if (dom.btnStartGame) dom.btnStartGame.disabled = false;
-    if (dom.btnShareWa) dom.btnShareWa.hidden = false;
-    if (dom.hostHint) dom.hostHint.hidden = true;
+    D.btnStart.disabled = false;
+    D.btnShare.hidden = false;
+    D.hostHint.hidden = true;
   } else {
-    if (dom.btnStartGame) dom.btnStartGame.disabled = true;
-    if (dom.btnShareWa) dom.btnShareWa.hidden = true;
-    if (dom.hostHint) dom.hostHint.hidden = false;
+    D.btnStart.disabled = true;
+    D.btnShare.hidden = true;
+    D.hostHint.hidden = false;
   }
 
-  const [sendPresence, onPresence] = room.makeAction('presence');
-  const [sendAnswers, onAnswers] = room.makeAction('answers');
-  const [sendRoundStart, onRoundStart] = room.makeAction('round-start');
-  const [sendResults, onResults] = room.makeAction('results');
-  const [sendConfig, onConfig] = room.makeAction('config');
-  const [sendDone, onDone] = room.makeAction('done');
+  const [sendPresence, onPresence] = S.room.makeAction('presence');
+  const [sendAnswers, onAnswers] = S.room.makeAction('answers');
+  const [sendDone, onDone] = S.room.makeAction('done');
+  const [sendRoundStart, onRoundStart] = S.room.makeAction('round-start');
+  const [sendResults, onResults] = S.room.makeAction('results');
+  const [sendConfig, onConfig] = S.room.makeAction('config');
 
-  state.send = {
-    presence: sendPresence,
-    answers: sendAnswers,
-    roundStart: sendRoundStart,
-    results: sendResults,
-    config: sendConfig,
-    done: sendDone,
-  };
+  S.send = { presence: sendPresence, answers: sendAnswers, done: sendDone,
+             roundStart: sendRoundStart, results: sendResults, config: sendConfig };
 
-  function announcePresence() {
-    sendPresence({ name: state.playerName, isHost: state.isHost });
-  }
+  const announce = () => sendPresence({ name: S.name, isHost: S.isHost });
 
   onPresence((data, peerId) => {
-    // La presenza può essere annunciata più volte: aggiorna solo i metadati
-    // e conserva risposte/prontezza già ricevute per questa manche.
-    const previous = state.peers.get(peerId) || {};
-    state.peers.set(peerId, {
-      ...previous,
-      name: data.name || previous.name || 'Giocatore',
-      isHost: Boolean(data.isHost),
-      ready: previous.ready || false,
-      answers: previous.answers || null,
+    S.peers.set(peerId, {
+      name: data.name, isHost: data.isHost, ready: false, answers: null,
     });
     renderPlayers();
-    if (state.isHost) {
-      sendConfig({ config: state.config }, peerId);
-    }
+    if (S.isHost) sendConfig({ config: S.config }, peerId);
+    announce();
   });
 
   onConfig((data) => {
-    if (state.isHost) return;
-    if (data && data.config) {
-      state.config = {
-        selectedExtras: Array.isArray(data.config.selectedExtras) ? data.config.selectedExtras : [],
-        timerSeconds: data.config.timerSeconds || 60,
-        totalRounds: data.config.totalRounds || 5,
-      };
-      applyConfigToUI();
-    }
+    if (S.isHost || !data?.config) return;
+    S.config = {
+      extras: Array.isArray(data.config.extras) ? data.config.extras : [],
+      timer: data.config.timer || 60,
+      rounds: data.config.rounds || 5,
+    };
+    syncConfigUI();
   });
 
-  room.onPeerJoin(peerId => {
-    console.log('Peer joined:', peerId);
-    if (dom.connDot) dom.connDot.classList.add('online');
-    setTimeout(announcePresence, 300);
+  S.room.onPeerJoin(peerId => {
+    console.log('peer join', peerId);
+    setTimeout(announce, 250);
   });
-
-  room.onPeerLeave(peerId => {
-    console.log('Peer left:', peerId);
-    state.peers.delete(peerId);
-    renderPlayers();
-    if (state.peers.size === 0 && dom.connDot) {
-      dom.connDot.classList.remove('online');
-      dom.connDot.classList.add('offline');
-    }
-  });
-
-  onAnswers((data, peerId) => {
-    if (!state.isHost || !data) return;
-    console.log('HOST onAnswers:', data, peerId);
-    const peer = state.peers.get(peerId);
-    if (!peer) {
-      console.warn('Risposte ricevute da peer non ancora presente:', peerId);
-      return;
-    }
-    peer.answers = data.answers && typeof data.answers === 'object' ? data.answers : {};
+  S.room.onPeerLeave(peerId => {
+    S.peers.delete(peerId);
     renderPlayers();
   });
 
-  onDone((data, peerId) => {
-    if (!state.isHost || !data) return;
-    const peer = state.peers.get(peerId);
-    if (!peer) {
-      console.warn('Segnale done ricevuto da peer non ancora presente:', peerId);
-      return;
+  onAnswers((data) => {
+    if (!S.isHost) return;
+    const name = data?.name;
+    if (!name) return;
+    const answers = data.answers || {};
+    if (name === S.name) { S.answers = answers; return; }
+    for (const p of S.peers.values()) {
+      if (p.name === name) { p.answers = answers; p.ready = true; break; }
     }
-    if (!state.firstDone && data.allFilled) {
-      state.firstDone = { peerKey: peerId, allFilled: true };
-    }
-    peer.ready = true;
     renderPlayers();
-    checkAllDone();
+  });
+
+  onDone((data) => {
+    if (!S.isHost) return;
+    const name = data?.name;
+    if (!name) return;
+    if (name === S.name) {
+      S.ready = true;
+    } else {
+      for (const p of S.peers.values()) {
+        if (p.name === name) { p.ready = true; break; }
+      }
+    }
+    renderPlayers();
+    checkAllReady();
   });
 
   onRoundStart((data) => {
-    console.log('CLIENT onRoundStart:', JSON.stringify(data));
-    if (state.isHost) return;
-    if (!data || !data.letter || !Array.isArray(data.categories)) {
-      console.error('Dati roundStart invalidi:', data);
-      showToast('Errore: dati di gioco non validi.');
+    if (S.isHost) return;
+    if (!data?.letter || !Array.isArray(data.categories)) {
+      toast('Errore: dati round mancanti');
       return;
     }
-    startRoundLocal(data);
+    clientStartRound(data);
   });
 
   onResults((data) => {
-    if (state.isHost) return;
-    if (data.scores) {
-      state.scores = new Map(data.scores);
-    }
+    if (S.isHost) return;
+    if (Array.isArray(data.scores)) S.scores = new Map(data.scores);
     renderStandings();
     renderResults(data.results);
+    D.resultsTitle.textContent = data.isLast ? 'Classifica finale' : 'Risultati manche';
+    D.btnNext.hidden = true;
     showScreen('results');
-    if (dom.btnNextRound) dom.btnNextRound.hidden = true;
-    if (dom.resultsTitle) {
-      dom.resultsTitle.textContent = data.isLastRound ? 'Classifica finale' : 'Risultati manche';
-    }
   });
 
-  setTimeout(announcePresence, 500);
-}
-
-// ------------------------------------------------------------
-// CHECK TUTTI PRONTI (host)
-// ------------------------------------------------------------
-function checkAllDone() {
-  if (!state.isHost) return;
-  if (!state.round.active) return;
-  if (!state.myReady) return;
-  for (const peer of state.peers.values()) {
-    if (!peer.ready) return;
-  }
-  // Tutti hanno finito: chiudi il round
-  state.round.active = false;
-  stopTimer();
-  showToast('Tutti hanno finito! Calcolo dei risultati...');
-  collectAndScore();
+  setTimeout(announce, 400);
 }
 
 // ------------------------------------------------------------
 // LOBBY
 // ------------------------------------------------------------
-dom.btnCreateRoom.addEventListener('click', () => {
-  ensurePlayerName();
-  const code = generateRoomCode();
-  const url = new URL(window.location);
+D.btnCreate.addEventListener('click', () => {
+  ensureName();
+  const code = codeRoom();
+  const url = new URL(location.href);
   url.searchParams.set('room', code);
-  window.history.pushState({}, '', url);
+  history.pushState({}, '', url);
   initRoom(true, code);
 });
 
-dom.btnJoinRoom.addEventListener('click', () => {
-  ensurePlayerName();
-  const code = dom.inputRoomCode.value.trim().toUpperCase();
-  if (!code) { showToast('Inserisci un codice stanza'); return; }
-  const url = new URL(window.location);
+D.btnJoin.addEventListener('click', () => {
+  ensureName();
+  const code = (D.inputCode.value || '').trim().toUpperCase();
+  if (!code) { toast('Inserisci un codice stanza'); return; }
+  const url = new URL(location.href);
   url.searchParams.set('room', code);
-  window.history.pushState({}, '', url);
+  history.pushState({}, '', url);
   initRoom(false, code);
 });
 
-dom.btnShareWa.addEventListener('click', () => {
-  const url = `${window.location.origin}${window.location.pathname}?room=${state.roomCode}`;
-  const text = encodeURIComponent(`Gioca a Nomi Cose Città! Clicca qui: ${url}`);
+D.btnShare.addEventListener('click', () => {
+  const url = `${location.origin}${location.pathname}?room=${S.roomCode}`;
+  const text = encodeURIComponent(`Gioca a Nomi Cose Città! ${url}`);
   window.open(`https://wa.me/?text=${text}`, '_blank');
 });
 
-dom.extraCategories.addEventListener('change', () => {
-  if (!state.isHost) return;
-  const checked = [...dom.extraCategories.querySelectorAll('.chip-check:checked')]
-    .map(cb => cb.value);
-  state.config.selectedExtras = checked;
+D.extraCats.addEventListener('change', () => {
+  if (!S.isHost) return;
+  S.config.extras = [...D.extraCats.querySelectorAll('.chip-check:checked')].map(c => c.value);
   broadcastConfig();
 });
-
-dom.timerOptions.addEventListener('change', () => {
-  if (!state.isHost) return;
-  const selected = dom.timerOptions.querySelector('.chip-check:checked');
-  if (selected) state.config.timerSeconds = parseInt(selected.value, 10);
+D.timerOpts.addEventListener('change', () => {
+  if (!S.isHost) return;
+  const sel = D.timerOpts.querySelector('.chip-check:checked');
+  if (sel) S.config.timer = parseInt(sel.value, 10);
   broadcastConfig();
 });
-
-dom.roundsOptions.addEventListener('change', () => {
-  if (!state.isHost) return;
-  const selected = dom.roundsOptions.querySelector('.chip-check:checked');
-  if (selected) state.config.totalRounds = parseInt(selected.value, 10);
+D.roundsOpts.addEventListener('change', () => {
+  if (!S.isHost) return;
+  const sel = D.roundsOpts.querySelector('.chip-check:checked');
+  if (sel) S.config.rounds = parseInt(sel.value, 10);
   broadcastConfig();
 });
 
 function broadcastConfig() {
-  if (state.isHost && state.send) {
-    state.send.config({ config: state.config });
-  }
+  if (S.isHost && S.send.config) S.send.config({ config: S.config });
 }
 
-function applyConfigToUI() {
-  if (dom.extraCategories) {
-    for (const cb of dom.extraCategories.querySelectorAll('.chip-check')) {
-      cb.checked = state.config.selectedExtras.includes(cb.value);
-    }
+function syncConfigUI() {
+  if (D.extraCats) {
+    D.extraCats.querySelectorAll('.chip-check').forEach(cb => {
+      cb.checked = S.config.extras.includes(cb.value);
+    });
   }
-  if (dom.timerOptions) {
-    for (const rb of dom.timerOptions.querySelectorAll('.chip-check')) {
-      rb.checked = parseInt(rb.value, 10) === state.config.timerSeconds;
-    }
+  if (D.timerOpts) {
+    D.timerOpts.querySelectorAll('.chip-check').forEach(rb => {
+      rb.checked = parseInt(rb.value, 10) === S.config.timer;
+    });
   }
-  if (dom.roundsOptions) {
-    for (const rb of dom.roundsOptions.querySelectorAll('.chip-check')) {
-      rb.checked = parseInt(rb.value, 10) === state.config.totalRounds;
-    }
+  if (D.roundsOpts) {
+    D.roundsOpts.querySelectorAll('.chip-check').forEach(rb => {
+      rb.checked = parseInt(rb.value, 10) === S.config.rounds;
+    });
   }
 }
 
@@ -438,456 +342,331 @@ function applyConfigToUI() {
 // RENDER GIOCATORI
 // ------------------------------------------------------------
 function renderPlayers() {
-  if (!dom.playerList || !dom.playerCount) return;
-
-  const list = [{
-    name: state.playerName + ' (tu)',
-    isHost: state.isHost,
-    ready: state.myReady,
-  }];
-
-  for (const [peerId, peer] of state.peers) {
-    list.push({
-      name: peer.name,
-      isHost: peer.isHost,
-      ready: peer.ready,
-    });
-  }
-
-  dom.playerCount.textContent = `(${list.length})`;
-  dom.playerList.innerHTML = list.map(p => `
+  if (!D.playerList) return;
+  const list = [
+    { name: S.name + ' (tu)', isHost: S.isHost, ready: S.ready },
+    ...[...S.peers.values()].map(p => ({ name: p.name, isHost: p.isHost, ready: p.ready })),
+  ];
+  D.playerCount.textContent = `(${list.length})`;
+  D.playerList.innerHTML = list.map(p => `
     <li>
-      <span class="player-name">${escapeHtml(p.name)}</span>
+      <span class="player-name">${esc(p.name)}</span>
       <span class="player-tag ${p.isHost ? 'host' : ''} ${p.ready ? 'ready' : ''}">
         ${p.isHost ? 'Host' : (p.ready ? 'Pronto' : 'In attesa')}
       </span>
-    </li>
-  `).join('');
-
-  if (dom.gamePlayerList) {
-    dom.gamePlayerList.innerHTML = list.map(p => `
+    </li>`).join('');
+  if (D.gamePlayerList) {
+    D.gamePlayerList.innerHTML = list.map(p => `
       <li>
-        <span class="player-name">${escapeHtml(p.name)}</span>
+        <span class="player-name">${esc(p.name)}</span>
         <span class="player-tag ${p.ready ? 'ready' : ''}">
           ${p.ready ? 'Pronto' : 'In gioco'}
         </span>
-      </li>
-    `).join('');
+      </li>`).join('');
   }
 }
 
 // ------------------------------------------------------------
 // AVVIO MANCHE
 // ------------------------------------------------------------
-dom.btnStartGame.addEventListener('click', () => {
-  if (!state.isHost) return;
-  startNewRound();
+D.btnStart.addEventListener('click', () => {
+  if (S.isHost) hostStartRound();
 });
 
-function startNewRound() {
-  if (!state.isHost) return;
-
+function hostStartRound() {
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-  const letter = pickLetter(seed, state.round.previousLetter);
+  const letter = pickLetter(seed, S.round.prevLetter);
 
-  state.round.number += 1;
-  state.round.seed = seed;
-  state.round.letter = letter;
-  state.round.timerSeconds = state.config.timerSeconds;
-  state.round.active = true;
-  state.round.previousLetter = letter;
+  S.round.num += 1;
+  S.round.letter = letter;
+  S.round.prevLetter = letter;
+  S.round.timer = S.config.timer;
+  S.round.active = true;
+  S.ready = false;
 
-  state.firstDone = null;
-  state.myReady = false;
-  state.myAnswers = {};
-  for (const peer of state.peers.values()) {
-    peer.ready = false;
-    peer.answers = null;
-  }
+  for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
 
-  const activeCategories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
+  const cats = activeCategories();
 
-  prepareGameUI(letter, state.round.number, seed, activeCategories);
-
-  if (state.send) {
-    state.send.roundStart({
-      letter,
-      roundNumber: state.round.number,
-      seed,
-      timerSeconds: state.round.timerSeconds,
-      categories: activeCategories,
-    });
-  }
-
-  startTimer(state.round.timerSeconds);
+  prepareGameUI(letter, S.round.num, seed, cats);
+  S.send.roundStart({ letter, num: S.round.num, seed, timer: S.round.timer, categories: cats });
+  runTimer(S.round.timer);
   showScreen('game');
 }
 
-function startRoundLocal(data) {
-  console.log('startRoundLocal chiamato con:', data);
-  state.round.number = data.roundNumber;
-  state.round.letter = data.letter;
-  state.round.seed = data.seed;
-  state.round.timerSeconds = data.timerSeconds;
-  state.round.active = true;
-  state.round.previousLetter = data.letter;
-
-  state.myReady = false;
-
-  prepareGameUI(data.letter, data.roundNumber, data.seed, data.categories);
-  startTimer(data.timerSeconds);
+function clientStartRound(data) {
+  S.round.num = data.num;
+  S.round.letter = data.letter;
+  S.round.timer = data.timer;
+  S.round.active = true;
+  S.ready = false;
+  prepareGameUI(data.letter, data.num, data.seed, data.categories);
+  runTimer(data.timer);
   showScreen('game');
 }
 
-function prepareGameUI(letter, roundNumber, seed, categories) {
-  if (!Array.isArray(categories)) {
-    console.error('prepareGameUI: categories non è un array', categories);
-    categories = [...FIXED_CATEGORIES];
-  }
+function prepareGameUI(letter, num, seed, cats) {
+  D.roundLetter.textContent = letter;
+  D.roundNumber.textContent = `Manche ${num} di ${S.config.rounds}`;
+  D.roundSeed.textContent = `seed: ${seed}`;
+  D.roundTimerBox.classList.remove('warning', 'danger', 'hidden-timer');
 
-  dom.roundLetter.textContent = letter;
-  dom.roundNumber.textContent = `Manche ${roundNumber} di ${state.config.totalRounds}`;
-  dom.roundSeed.textContent = `seed: ${seed}`;
-  dom.roundTimerBox.classList.remove('warning', 'danger', 'hidden-timer');
-
-  dom.categoryInputs.innerHTML = categories.map(cat => `
-    <div class="cat-row" data-cat="${escapeHtml(cat)}">
+  D.categoryInputs.innerHTML = cats.map(c => `
+    <div class="cat-row" data-cat="${esc(c)}">
       <div class="cat-top">
-        <span class="cat-name">${escapeHtml(cat)}</span>
-        <span class="cat-status" data-status="${escapeHtml(cat)}">—</span>
+        <span class="cat-name">${esc(c)}</span>
+        <span class="cat-status" data-status="${esc(c)}">—</span>
       </div>
-      <input class="input" type="text" data-input="${escapeHtml(cat)}"
-             placeholder="${escapeHtml(cat)} con la ${letter}..." autocomplete="off">
-    </div>
-  `).join('');
+      <input class="input" type="text" data-input="${esc(c)}"
+             placeholder="${esc(c)} con la ${esc(letter)}..." autocomplete="off">
+    </div>`).join('');
 
-  state.myAnswers = {};
-  state.myReady = false;
-  dom.btnDone.disabled = false;
-  dom.btnDone.textContent = 'Ho finito!';
-  dom.doneHint.hidden = true;
+  S.answers = {};
+  S.ready = false;
+  D.btnDone.disabled = false;
+  D.btnDone.textContent = 'Ho finito!';
+  D.doneHint.hidden = true;
 
-  for (const input of dom.categoryInputs.querySelectorAll('input')) {
-    input.addEventListener('input', (e) => {
-      state.myAnswers[e.target.dataset.input] = e.target.value.trim();
+  D.categoryInputs.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', (e) => {
+      S.answers[e.target.dataset.input] = e.target.value.trim();
     });
-  }
+  });
 }
 
 // ------------------------------------------------------------
 // TIMER
 // ------------------------------------------------------------
-function startTimer(seconds) {
+function runTimer(seconds) {
   stopTimer();
   if (seconds <= 0) {
-    dom.roundTimer.textContent = '∞';
-    dom.roundTimerBox.classList.add('hidden-timer');
+    D.roundTimer.textContent = '∞';
+    D.roundTimerBox.classList.add('hidden-timer');
     return;
   }
-
-  let remaining = seconds;
-  state.remainingSeconds = remaining;
-  dom.roundTimer.textContent = formatTime(remaining);
-
-  state.timerInterval = setInterval(() => {
-    state.remainingSeconds -= 1;
-    dom.roundTimer.textContent = formatTime(Math.max(0, state.remainingSeconds));
-
-    const rem = state.remainingSeconds;
-    if (rem <= 10 && rem > 0) dom.roundTimerBox.classList.add('warning');
-    if (rem <= 5) {
-      dom.roundTimerBox.classList.remove('warning');
-      dom.roundTimerBox.classList.add('danger');
-    }
-
-    if (rem <= 0) {
-      stopTimer();
-      onRoundTimeUp();
-    }
+  S.round.remaining = seconds;
+  D.roundTimer.textContent = fmt(seconds);
+  S.interval = setInterval(() => {
+    S.round.remaining -= 1;
+    D.roundTimer.textContent = fmt(S.round.remaining);
+    if (S.round.remaining <= 10 && S.round.remaining > 0) D.roundTimerBox.classList.add('warning');
+    if (S.round.remaining <= 5) { D.roundTimerBox.classList.remove('warning'); D.roundTimerBox.classList.add('danger'); }
+    if (S.round.remaining <= 0) { stopTimer(); onTimeUp(); }
   }, 1000);
 }
 
-function formatTime(s) {
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return m > 0 ? `${m}:${String(sec).padStart(2, '0')}` : `${sec}`;
-}
-
 function stopTimer() {
-  if (state.timerInterval) {
-    clearInterval(state.timerInterval);
-    state.timerInterval = null;
-  }
+  if (S.interval) { clearInterval(S.interval); S.interval = null; }
 }
 
 // ------------------------------------------------------------
 // HO FINITO!
 // ------------------------------------------------------------
-dom.btnDone.addEventListener('click', () => {
-  if (state.myReady) return;
-  state.myReady = true;
-  dom.btnDone.disabled = true;
-  dom.doneHint.hidden = false;
-  dom.btnDone.textContent = 'In attesa...';
+D.btnDone.addEventListener('click', () => {
+  if (S.ready) return;
+  S.ready = true;
+  D.btnDone.disabled = true;
+  D.btnDone.textContent = 'In attesa...';
+  D.doneHint.hidden = false;
   renderPlayers();
 
-  const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
-  const allFilled = categories.every(cat => (state.myAnswers[cat] || '').length > 0);
-
   stopTimer();
-  dom.roundTimer.textContent = formatTime(state.remainingSeconds);
+  D.roundTimer.textContent = fmt(S.round.remaining);
 
-  if (!state.isHost && state.send) {
-    state.send.answers({ answers: state.myAnswers, name: state.playerName });
-    state.send.done({ name: state.playerName, allFilled });
-  } else if (state.isHost) {
-    if (!state.firstDone && allFilled) {
-      state.firstDone = { peerKey: '__host__', allFilled: true };
-    }
-    checkAllDone();
+  if (!S.isHost && S.send.answers) {
+    S.send.answers({ name: S.name, answers: S.answers });
+    S.send.done({ name: S.name });
+  } else if (S.isHost) {
+    checkAllReady();
   }
 
-  if (!allFilled) {
-    showToast('Hai finito, ma non hai compilato tutti i campi: nessun bonus.');
-  } else {
-    showToast('Hai finito! Bonus valido solo se tutte le parole sono corrette.');
-  }
+  toast('Hai finito! Attendo gli altri...');
 });
 
 // ------------------------------------------------------------
-// FINE MANCHE
+// CONTROLLO TUTTI PRONTI (host)
 // ------------------------------------------------------------
-function onRoundTimeUp() {
-  if (!state.round.active) return;
-  state.round.active = false;
+function checkAllReady() {
+  if (!S.isHost || !S.round.active) return;
+  if (!S.ready) return;
+  for (const p of S.peers.values()) if (!p.ready) return;
+  S.round.active = false;
+  stopTimer();
+  toast('Tutti pronti, calcolo...');
+  scoreRound();
+}
+
+// ------------------------------------------------------------
+// FINE TEMPO
+// ------------------------------------------------------------
+function onTimeUp() {
+  if (!S.round.active) return;
+  S.round.active = false;
   stopTimer();
 
-  if (state.isHost) {
-    collectAndScore();
+  if (S.isHost) {
+    scoreRound();
   } else {
-    if (state.send) {
-      state.send.answers({ answers: state.myAnswers, name: state.playerName });
-    }
-    showToast('Tempo scaduto! In attesa dei risultati...');
+    if (S.send.answers) S.send.answers({ name: S.name, answers: S.answers });
+    toast('Tempo scaduto, attendo i risultati...');
   }
 }
 
 // ------------------------------------------------------------
-// SCORING (host)
+// PUNTEGGI (host)
 // ------------------------------------------------------------
-async function collectAndScore() {
+async function scoreRound() {
   await new Promise(r => setTimeout(r, 2500));
 
-  const allAnswers = new Map();
-  allAnswers.set('__host__', { name: state.playerName, answers: state.myAnswers });
-  for (const [peerId, peer] of state.peers.entries()) {
-    allAnswers.set(peerId, { name: peer.name, answers: peer.answers || {} });
-  }
+  const players = [
+    { name: S.name, answers: S.answers },
+    ...[...S.peers.values()].map(p => ({ name: p.name, answers: p.answers || {} })),
+  ];
 
-  const categories = [...FIXED_CATEGORIES, ...(state.config.selectedExtras || [])];
+  const cats = activeCategories();
   const results = {};
-  const pointsByKey = new Map();
+  const totals = new Map();
 
-  for (const cat of categories) {
+  for (const cat of cats) {
     results[cat] = [];
-    for (const [peerKey, data] of allAnswers) {
-      const word = (data.answers[cat] || '').trim();
-      let valid = false;
-      if (word) valid = await verifyWord(word, state.round.letter, cat);
-      results[cat].push({
-        peerKey,
-        playerName: data.name,
-        word,
-        valid,
-        points: 0,
-        bonus: 0,
-        bonusFlag: false,
-      });
+    for (const pl of players) {
+      const word = (pl.answers[cat] || '').trim();
+      const valid = word ? await askGemini(word, S.round.letter, cat) : false;
+      results[cat].push({ playerName: pl.name, word, valid, points: 0 });
     }
   }
 
-  for (const cat of categories) {
+  for (const cat of cats) {
     const entries = results[cat];
-    const wordCounts = {};
+    const counts = {};
     for (const e of entries) {
-      // Solo le risposte confermate valide partecipano al conteggio dei duplicati.
-      if (e.valid === true && e.word) {
-        const key = e.word.toLowerCase();
-        wordCounts[key] = (wordCounts[key] || 0) + 1;
+      if (e.valid && e.word) {
+        const k = e.word.toLowerCase();
+        counts[k] = (counts[k] || 0) + 1;
       }
     }
     for (const e of entries) {
-      if (e.valid !== true || !e.word) { e.points = 0; continue; }
-      const key = e.word.toLowerCase();
-      e.points = wordCounts[key] > 1 ? 5 : 10;
+      if (!e.valid || !e.word) { e.points = 0; continue; }
+      const k = e.word.toLowerCase();
+      e.points = counts[k] > 1 ? 5 : 10;
     }
   }
 
-  for (const cat of categories) {
+  for (const cat of cats) {
     for (const e of results[cat]) {
-      if (!pointsByKey.has(e.peerKey)) {
-        pointsByKey.set(e.peerKey, { name: e.playerName, points: 0, bonus: 0 });
-      }
-      pointsByKey.get(e.peerKey).points += e.points;
+      if (!totals.has(e.playerName)) totals.set(e.playerName, { name: e.playerName, points: 0 });
+      totals.get(e.playerName).points += e.points;
     }
   }
 
-  if (state.firstDone && state.firstDone.allFilled) {
-    const firstKey = state.firstDone.peerKey;
-    let allValid = true;
-    let hasAnyWord = false;
-    for (const cat of categories) {
-      const entry = results[cat].find(e => e.peerKey === firstKey);
-      if (!entry) continue;
-      if (entry.word) hasAnyWord = true;
-      // Il bonus è assegnato solo se tutte le risposte compilate sono confermate valide.
-      if (entry.word && entry.valid !== true) { allValid = false; break; }
-    }
-    if (allValid && hasAnyWord) {
-      const entry = pointsByKey.get(firstKey);
-      if (entry) {
-        entry.bonus = STOP_BONUS;
-        for (const cat of categories) {
-          const e = results[cat].find(x => x.peerKey === firstKey);
-          if (e && e.word) e.bonusFlag = true;
-        }
-      }
-    }
+  for (const t of totals.values()) {
+    if (!S.scores.has(t.name)) S.scores.set(t.name, { name: t.name, total: 0 });
+    S.scores.get(t.name).total += t.points;
   }
 
-  addRoundScores(pointsByKey);
+  const isLast = S.round.num >= S.config.rounds;
 
-  const isLastRound = state.round.number >= state.config.totalRounds;
-
-  if (state.send) {
-    state.send.results({
-      results,
-      scores: [...state.scores.entries()],
-      isLastRound,
-    });
+  if (S.send.results) {
+    S.send.results({ results, scores: [...S.scores.entries()], isLast });
   }
 
   renderStandings();
   renderResults(results);
+  D.resultsTitle.textContent = isLast ? 'Classifica finale' : 'Risultati manche';
+  D.btnNext.hidden = !S.isHost || isLast;
   showScreen('results');
-  dom.resultsTitle.textContent = isLastRound ? 'Classifica finale' : 'Risultati manche';
-  dom.btnNextRound.hidden = !state.isHost || isLastRound;
-
-  if (isLastRound) {
-    showToast('Partita terminata!');
-  }
 }
 
 // ------------------------------------------------------------
-// VERIFICA PAROLE (con categoria)
+// GEMINI
 // ------------------------------------------------------------
-async function verifyWord(word, letter, category) {
-  const normalizedWord = String(word || '').trim();
-  const normalizedLetter = String(letter || '').trim().toLocaleUpperCase('it');
+async function askGemini(word, letter, category) {
+  if (word.length < 2) return false;
+  if (word[0].toUpperCase() !== letter) return false;
 
-  // Regole deterministiche: non chiediamo all'AI di correggere input formalmente errati.
-  if (normalizedWord.length < 2) return false;
-  if (!normalizedLetter || normalizedWord[0].toLocaleUpperCase('it') !== normalizedLetter) return false;
-  if (!category || typeof category !== 'string') return false;
-
-  // Tutte le categorie passano dallo stesso verificatore semantico.
-  // Wikipedia/Wikidata non decidono più la validità della risposta.
   try {
     const res = await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        word: normalizedWord,
-        letter: normalizedLetter,
-        category: category.trim(),
-      }),
+      body: JSON.stringify({ word, letter, category }),
     });
-
     if (!res.ok) {
-      console.warn('Worker verification HTTP error:', res.status);
-      return null;
+      console.warn('Worker HTTP error', res.status);
+      return false;
     }
-
     const data = await res.json();
-    return data.valid === true ? true : data.valid === false ? false : null;
-  } catch (error) {
-    console.warn('Worker error:', error);
-    return null;
+    return data.valid === true;
+  } catch (e) {
+    console.warn('Worker fetch failed', e);
+    return false;
   }
 }
+
 // ------------------------------------------------------------
-// RENDER RISULTATI
+// RENDER RISULTATI E CLASSIFICA
 // ------------------------------------------------------------
-function renderResults(results) {
-  if (!dom.resultsContent) return;
-  if (!results) {
-    dom.resultsContent.innerHTML = '<p class="muted">Nessun risultato.</p>';
+function renderStandings() {
+  if (!D.standings) return;
+  const arr = [...S.scores.values()].sort((a, b) => b.total - a.total);
+  if (!arr.length) {
+    D.standings.innerHTML = '<p class="muted">Nessun punteggio.</p>';
     return;
   }
-  const html = Object.entries(results).map(([cat, entries]) => {
-    const rows = entries.map(e => {
-      const cls = e.word && e.valid === false ? 'word-dup' : '';
-      const status = !e.word ? '(vuoto)' : e.valid === true ? '' : e.valid === false ? '(non valida)' : '(da verificare · 0 punti)';
-      const bonusTag = e.bonusFlag ? `<span class="bonus-tag">+${STOP_BONUS}</span>` : '';
-      return `
-        <div class="result-row">
-          <span>${escapeHtml(e.playerName)}: <span class="${cls}">${escapeHtml(e.word || '—')}</span> ${status}${bonusTag}</span>
-          <span class="points">${e.points} pt</span>
-        </div>
-      `;
-    }).join('');
-    return `
-      <div class="result-cat">
-        <div class="result-cat-title">${escapeHtml(cat)}</div>
-        ${rows}
-      </div>
-    `;
-  }).join('');
+  D.standings.innerHTML = `<div class="standings">${arr.map((s, i) => `
+    <div class="standing-row ${i === 0 ? 'first' : ''}">
+      <span class="standing-pos">${i + 1}°</span>
+      <span class="standing-name">${esc(s.name)}</span>
+      <span class="standing-points">${s.total} pt</span>
+    </div>`).join('')}</div>`;
+}
 
-  dom.resultsContent.innerHTML = html;
+function renderResults(results) {
+  if (!D.results) return;
+  if (!results) { D.results.innerHTML = '<p class="muted">Nessun risultato.</p>'; return; }
+  D.results.innerHTML = Object.entries(results).map(([cat, entries]) => {
+    const rows = entries.map(e => {
+      const status = e.word ? (e.valid ? '' : '(non valida)') : '(vuoto)';
+      return `<div class="result-row">
+        <span>${esc(e.playerName)}: <span class="${e.word && !e.valid ? 'word-dup' : ''}">${esc(e.word || '—')}</span> ${status}</span>
+        <span class="points">${e.points} pt</span>
+      </div>`;
+    }).join('');
+    return `<div class="result-cat"><div class="result-cat-title">${esc(cat)}</div>${rows}</div>`;
+  }).join('');
 }
 
 // ------------------------------------------------------------
 // PROSSIMA MANCHE
 // ------------------------------------------------------------
-dom.btnNextRound.addEventListener('click', () => {
-  if (!state.isHost) return;
-  if (state.round.number >= state.config.totalRounds) {
-    showToast('Partita già terminata.');
-    return;
-  }
-  state.myReady = false;
-  state.myAnswers = {};
+D.btnNext.addEventListener('click', () => {
+  if (!S.isHost) return;
+  if (S.round.num >= S.config.rounds) return;
+  S.ready = false;
+  S.answers = {};
   renderPlayers();
-  startNewRound();
+  hostStartRound();
 });
 
 // ------------------------------------------------------------
 // BOOT
 // ------------------------------------------------------------
-function boot() {
-  if (dom.inputPlayerName) {
-    const saved = localStorage.getItem(STORAGE_KEY_NAME);
-    if (saved) dom.inputPlayerName.value = saved;
+(function boot() {
+  if (D.inputName) {
+    const saved = localStorage.getItem(STORAGE_NAME);
+    if (saved) D.inputName.value = saved;
   }
 
-  const search = window.location.search;
-  const params = new URLSearchParams(search);
-  let roomCode = params.get('room');
-
-  if (!roomCode && search.includes('room=')) {
-    const match = search.match(/[?&]room=([^&]+)/);
-    if (match) roomCode = decodeURIComponent(match[1]);
+  const params = new URLSearchParams(location.search);
+  let code = params.get('room');
+  if (!code && location.search.includes('room=')) {
+    const m = location.search.match(/[?&]room=([^&]+)/);
+    if (m) code = decodeURIComponent(m[1]);
   }
 
-  console.log('BOOT - search:', search, 'roomCode:', roomCode);
-
-  if (roomCode) {
-    ensurePlayerName();
-    initRoom(false, roomCode.toUpperCase());
+  if (code) {
+    ensureName();
+    initRoom(false, code.toUpperCase());
   } else {
     showScreen('lobby');
   }
-}
-
-boot();
+})();
