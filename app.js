@@ -803,10 +803,12 @@ async function askGemini(word, letter, category) {
   if (word[0].toUpperCase() !== letter) return false;
 
   try {
+    const payload = { word, letter, category };
+    console.log('[NCC] Verifica parola: richiesta', payload);
     const res = await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ word, letter, category }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const errText = await res.text();
@@ -815,6 +817,7 @@ async function askGemini(word, letter, category) {
       return false;
     }
     const data = await res.json();
+    console.log('[NCC] Verifica parola: risposta', { status: res.status, data });
     if (data.error) {
       toast('Worker: ' + data.error, 4000);
       return false;
