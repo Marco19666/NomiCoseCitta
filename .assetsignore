@@ -1,0 +1,12 @@
+# Escludi il codice del Worker e i file di configurazione
+worker/
+wrangler.toml
+
+# Escludi file di sistema e cartelle che non devono essere pubbliche
+.git/
+.wrangler/
+node_modules/
+
+# Escludi i file del client che contengono import esterni (se necessario)
+# Se app.js è nella root e causa problemi, aggiungilo qui:
+# app.js
