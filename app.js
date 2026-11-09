@@ -297,7 +297,7 @@ function initRoom(isHost, roomCode) {
     if (S.isHost) return;
     if (Array.isArray(data.scores)) S.scores = new Map(data.scores);
     renderStandings();
-    renderResults(data.results);
+    renderResults(data.results, data.bonuses || {});
     D.resultsTitle.textContent = data.isLast ? 'Classifica finale' : 'Risultati manche';
     D.btnNext.hidden = true;
     if (D.btnNewGame) D.btnNewGame.hidden = !data.isLast;
@@ -651,11 +651,24 @@ async function scoreRound() {
     }
   }
 
+  // Bonus en plein : +15 si tutte le categorie hanno una risposta valida.
+  const bonuses = {};
+  for (const pl of players) {
+    const perfectRound = cats.length > 0 && cats.every(cat =>
+      results[cat].some(e => e.playerName === pl.name && e.valid && e.word)
+    );
+    if (perfectRound) bonuses[pl.name] = 15;
+  }
+
   for (const cat of cats) {
     for (const e of results[cat]) {
       if (!totals.has(e.playerName)) totals.set(e.playerName, { name: e.playerName, points: 0 });
       totals.get(e.playerName).points += e.points;
     }
+  }
+  for (const [name, bonus] of Object.entries(bonuses)) {
+    if (!totals.has(name)) totals.set(name, { name, points: 0 });
+    totals.get(name).points += bonus;
   }
 
   for (const t of totals.values()) {
@@ -666,11 +679,11 @@ async function scoreRound() {
   const isLast = S.round.num >= S.config.rounds;
 
   if (S.send.results) {
-    S.send.results({ results, scores: [...S.scores.entries()], isLast });
+    S.send.results({ results, bonuses, scores: [...S.scores.entries()], isLast });
   }
 
   renderStandings();
-  renderResults(results);
+  renderResults(results, bonuses);
   D.resultsTitle.textContent = isLast ? 'Classifica finale' : 'Risultati manche';
   D.btnNext.hidden = !S.isHost || isLast;
   if (D.btnNewGame) D.btnNewGame.hidden = !isLast;
@@ -727,7 +740,7 @@ function renderStandings() {
     </div>`).join('')}</div>`;
 }
 
-function renderResults(results) {
+function renderResults(results, bonuses = {}) {
   if (!D.results) return;
   if (!results) { D.results.innerHTML = '<p class="muted">Nessun risultato.</p>'; return; }
   D.results.innerHTML = Object.entries(results).map(([cat, entries]) => {
@@ -740,6 +753,10 @@ function renderResults(results) {
     }).join('');
     return `<div class="result-cat"><div class="result-cat-title">${esc(cat)}</div>${rows}</div>`;
   }).join('');
+  const bonusRows = Object.entries(bonuses).map(([name, points]) =>
+    `<div class="result-row bonus-row"><span>${esc(name)}: en plein!</span><strong>+${points} pt bonus</strong></div>`
+  ).join('');
+  if (bonusRows) D.results.innerHTML += `<div class="result-cat bonus-summary"><div class="result-cat-title">🏆 Bonus en plein</div>${bonusRows}</div>`;
 }
 
 // ------------------------------------------------------------
