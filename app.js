@@ -21,6 +21,7 @@ const S = {
   isHost: false,
   isCpuGame: false,
   cpuAnswers: {},
+  cpuDifficulty: 'medium',
   roomCode: '',
   room: null,
   send: {},
@@ -445,16 +446,17 @@ const CPU_DICTIONARY = {
   Cibo: 'arancia;ananas;aragosta;banana;barbabietola;biscotto;broccoli;burrata;cannelloni;carciofo;carota;castagna;ciambella;cicoria;cioccolato;focaccia;formaggio;fragola;gnocchi;insalata;lasagna;limone;mandarino;mela;melanzana;minestrone;mozzarella;noce;oliva;omelette;panettone;pasta;pera;pesca;pizza;polenta;quinoa;radicchio;ravioli;risotto;salame;spaghetti;tiramisù;uva;zuppa;zucchina'
 };
 
-function makeComputerAnswers(categories, letter) {
+function makeComputerAnswers(categories, letter, difficulty = 'medium') {
   const answers = {};
   for (const category of categories) {
     const entries = (CPU_DICTIONARY[category] || '')
       .split(';')
       .map(word => word.trim())
       .filter(word => word && word[0].toLocaleUpperCase('it-IT') === letter);
-    answers[category] = entries.length
-      ? entries[Math.floor(Math.random() * entries.length)]
-      : '';
+    if (difficulty === 'easy') entries.sort((x, y) => x.length - y.length);
+    if (difficulty === 'hard') entries.sort((x, y) => y.length - x.length);
+    const pool = difficulty === 'easy' ? entries.slice(0, 5) : difficulty === 'hard' ? entries.slice(0, 8) : entries;
+    answers[category] = pool.length ? pool[Math.floor(Math.random() * pool.length)] : '';
   }
   return answers;
 }
@@ -462,20 +464,20 @@ function makeComputerAnswers(categories, letter) {
 // ------------------------------------------------------------
 // AVVIO MANCHE
 // ------------------------------------------------------------
-D.btnStart.addEventListener('click', () => {
+D.btnStart.addEventListener('click', async () => {
   if (!S.isHost) {
     toast('Solo chi ha creato la stanza può avviare la partita.');
     return;
   }
   try {
-    hostStartRound();
+    await hostStartRound();
   } catch (error) {
     console.error('Errore avvio partita:', error);
     toast('Impossibile avviare: ' + (error?.message || error), 6000);
   }
 });
 
-function hostStartRound() {
+async function hostStartRound() {
   if (S.round.num >= S.config.rounds) {
     toast('La partita è terminata: avvia una nuova partita.');
     return;
@@ -487,6 +489,11 @@ function hostStartRound() {
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   const letter = pickLetter(seed, S.usedLetters);
   if (!letter) return;
+  if (S.isCpuGame) {
+    D.btnStart.disabled = true;
+    D.btnNext.disabled = true;
+    toast('Il computer sta cercando risposte online…', 5000);
+  }
   S.usedLetters.push(letter);
 
   S.round.num += 1;
@@ -501,7 +508,26 @@ function hostStartRound() {
   for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
 
   const cats = activeCategories();
-  S.cpuAnswers = S.isCpuGame ? makeComputerAnswers(cats, letter) : {};
+  if (S.isCpuGame) {
+    try {
+      const response = await fetch(WORKER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'suggest', letter, categories: cats, difficulty: S.cpuDifficulty }),
+      });
+      if (!response.ok) throw new Error('Worker HTTP ' + response.status);
+      const data = await response.json();
+      S.cpuAnswers = { ...makeComputerAnswers(cats, letter, S.cpuDifficulty), ...(data.answers || {}) };
+    } catch (error) {
+      console.warn('Ricerca online computer non riuscita:', error);
+      S.cpuAnswers = makeComputerAnswers(cats, letter, S.cpuDifficulty);
+      toast('Ricerca online non disponibile: uso risposte di riserva.', 4000);
+    }
+    D.btnStart.disabled = false;
+    D.btnNext.disabled = false;
+  } else {
+    S.cpuAnswers = {};
+  }
 
   // Avvia prima la schermata locale: la partita dell'host non deve
   // dipendere dalla disponibilità momentanea del canale multiplayer.
@@ -903,13 +929,13 @@ D.btnNewGame?.addEventListener('click', () => {
   if (S.send.newGame) S.send.newGame({});
 });
 
-D.btnNext.addEventListener('click', () => {
+D.btnNext.addEventListener('click', async () => {
   if (!S.isHost) return;
   if (S.round.num >= S.config.rounds) return;
   S.ready = false;
   S.answers = {};
   renderPlayers();
-  hostStartRound();
+  await hostStartRound();
 });
 
 // ------------------------------------------------------------
