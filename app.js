@@ -70,6 +70,7 @@ const D = {
   extraCats: $('extraCategories'),
   timerOpts: $('timerOptions'),
   roundsOpts: $('roundsOptions'),
+  cpuDifficultyOptions: $('cpuDifficultyOptions'),
   playerList: $('playerList'),
   playerCount: $('playerCount'),
   btnShare: $('btnShareWa'),
@@ -187,6 +188,7 @@ function initRoom(isHost, roomCode) {
   D.connDot.classList.add('online');
   D.joinCard.hidden = true;
   D.configCard.hidden = false;
+  if (D.cpuDifficultyOptions) D.cpuDifficultyOptions.hidden = true;
   if (isHost) {
     D.btnStart.disabled = false;
     D.btnShare.hidden = false;
@@ -340,6 +342,7 @@ D.btnCpu?.addEventListener('click', () => {
   D.roomBadge.hidden = true;
   D.joinCard.hidden = true;
   D.configCard.hidden = false;
+  if (D.cpuDifficultyOptions) D.cpuDifficultyOptions.hidden = false;
   D.btnStart.disabled = false;
   D.btnShare.hidden = true;
   D.hostHint.hidden = true;
@@ -374,6 +377,12 @@ D.timerOpts.addEventListener('change', () => {
   if (sel) S.config.timer = parseInt(sel.value, 10);
   broadcastConfig();
 });
+D.cpuDifficultyOptions?.addEventListener('change', (event) => {
+  if (!S.isCpuGame) return;
+  const selected = event.target.closest('input[name="cpuDifficulty"]');
+  if (selected) S.cpuDifficulty = selected.value;
+});
+
 D.roundsOpts.addEventListener('change', () => {
   if (!S.isHost) return;
   const sel = D.roundsOpts.querySelector('.chip-check:checked');
