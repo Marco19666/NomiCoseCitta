@@ -19,6 +19,8 @@ const WORKER_URL = 'https://muddy-grass-6726.chiccovision.workers.dev';
 const S = {
   name: '',
   isHost: false,
+  isCpuGame: false,
+  cpuAnswers: {},
   roomCode: '',
   room: null,
   send: {},
@@ -60,6 +62,7 @@ const D = {
   btnCreate: $('btnCreateRoom'),
   inputCode: $('inputRoomCode'),
   btnJoin: $('btnJoinRoom'),
+  btnCpu: $('btnCpuChallenge'),
 
   extraCats: $('extraCategories'),
   timerOpts: $('timerOptions'),
@@ -319,6 +322,24 @@ D.btnCreate.addEventListener('click', () => {
   initRoom(true, code);
 });
 
+D.btnCpu?.addEventListener('click', () => {
+  ensureName();
+  S.isCpuGame = true;
+  S.isHost = true;
+  S.room = null;
+  S.roomCode = '';
+  S.peers.clear();
+  S.scores.clear();
+  D.roomBadge.hidden = true;
+  D.joinCard.hidden = true;
+  D.configCard.hidden = false;
+  D.btnStart.disabled = false;
+  D.btnShare.hidden = true;
+  D.hostHint.hidden = true;
+  renderPlayers();
+  toast('Sfida contro il computer: scegli le impostazioni e inizia!');
+});
+
 D.btnJoin.addEventListener('click', () => {
   ensureName();
   const code = (D.inputCode.value || '').trim().toUpperCase();
@@ -383,6 +404,7 @@ function renderPlayers() {
   const list = [
     { name: S.name + ' (tu)', isHost: S.isHost, ready: S.ready },
     ...[...S.peers.values()].map(p => ({ name: p.name, isHost: p.isHost, ready: p.ready })),
+    ...(S.isCpuGame ? [{ name: 'Computer', isHost: false, ready: false }] : []),
   ];
   D.playerCount.textContent = `(${list.length})`;
   D.playerList.innerHTML = list.map(p => `
@@ -401,6 +423,34 @@ function renderPlayers() {
         </span>
       </li>`).join('');
   }
+}
+
+// Dizionario locale usato dall'avversario virtuale.
+const CPU_DICTIONARY = {
+  Cose: 'abaco;abat-jour;accendino;agenda;ago;album;anello;antenna;armadio;asciugamano;aspirapolvere;auto;balcone;borsa;bottiglia;bracciale;calendario;camera;campana;candela;carota;cartella;casco;chiave;chitarra;ciotola;computer;coperta;corda;cucchiaio;diamante;dizionario;doccia;domino;elastico;elmo;enciclopedia;erba;faro;ferro;finestra;forchetta;forno;fotografia;frigorifero;gabbia;gancio;gelato;gomma;guanto;lampada;lavagna;libro;martello;matita;medaglia;microfono;moneta;motore;nastro;occhiali;ombrello;orologio;padella;palazzo;palla;panino;paracadute;passaporto;penna;pettine;piatto;porta;quaderno;radio;rete;righello;robot;ruota;sedia;semaforo;scarpa;scatola;specchio;telefono;tenda;termometro;tavolo;tovaglia;treno;valigia;vaso;ventaglio;zaino;zerbino',
+  Nomi: 'Ada;Alberto;Alessandro;Alice;Andrea;Anna;Antonio;Beatrice;Bruno;Carla;Carlo;Chiara;Claudia;Davide;Diego;Domenico;Elena;Enrico;Erica;Fabio;Federica;Filippo;Francesca;Franco;Gabriele;Giada;Giorgio;Giulia;Giuseppe;Ilaria;Irene;Luca;Lucia;Luigi;Marco;Maria;Martina;Matteo;Michele;Nicola;Paola;Paolo;Pietro;Roberto;Sara;Sofia;Stefano;Tommaso;Valentina;Vittoria;Walter;Zeno;Zoe',
+  Città: 'Aosta;Alessandria;Ancona;Arezzo;Asti;Bari;Bergamo;Bologna;Bolzano;Brescia;Cagliari;Catania;Como;Cosenza;Cremona;Cuneo;Ferrara;Firenze;Foggia;Forlì;Genova;Gorizia;Grosseto;Imperia;Isernia;La Spezia;Latina;Lecce;Lecco;Livorno;Lodi;Lucca;Mantova;Massa;Matera;Messina;Milano;Modena;Napoli;Novara;Nuoro;Oristano;Padova;Palermo;Parma;Pavia;Perugia;Pescara;Pisa;Pistoia;Potenza;Prato;Ravenna;Reggio Calabria;Rieti;Rimini;Roma;Rovigo;Salerno;Sassari;Savona;Siena;Siracusa;Sondrio;Taranto;Teramo;Terni;Torino;Trapani;Trento;Treviso;Trieste;Udine;Varese;Venezia;Verona;Vercelli;Vicenza;Viterbo;Zagabria;Zurigo',
+  Animali: 'aquila;asino;allocco;anaconda;ape;balena;barboncino;bruco;cane;capra;castoro;cavallo;cervo;chiocciola;cicogna;cigno;coccodrillo;coniglio;daino;delfino;dromedario;elefante;ermellino;falco;farfalla;fenicottero;formica;gabbiano;gatto;ghepardo;giraffa;gorilla;gufo;iguana;istrice;koala;lama;leone;leopardo;lumaca;lupo;medusa;merlo;mosca;mucca;oca;opossum;orca;ornitorinco;orso;ostrica;pantera;pappagallo;pecora;pipistrello;quaglia;ragno;rana;riccio;rinoceronte;rospo;scoiattolo;serpente;squalo;tartaruga;tasso;tigre;topo;toro;tucano;upupa;vacca;volpe;yak;zanzara;zebra',
+  Mestieri: 'agricoltore;albergatore;architetto;artigiano;attore;barbiere;barista;benzinaio;calciatore;cantante;carabiniere;carpentiere;casaro;chef;chirurgo;commesso;cuoco;dentista;docente;elettricista;fabbro;farmacista;falegname;fotografo;geometra;giornalista;idraulico;impiegato;infermiere;insegnante;ingegnere;interprete;lavapiatti;macellaio;magazziniere;marinaio;meccanico;medico;musicista;notaio;operaio;ostetrica;panettiere;parrucchiere;pilota;pizzaiolo;poliziotto;portiere;professore;psicologo;questore;regista;ristoratore;sarto;sceneggiatore;segretario;sommelier;tecnico;traduttore;ufficiale;veterinario;vigile;zoologo',
+  Colori: 'amaranto;arancione;azzurro;beige;bianco;blu;celeste;crema;corallo;fucsia;giallo;grigio;indaco;lilla;marrone;magenta;nero;ocra;oro;ottanio;porpora;rosa;rosso;rame;salmonato;senape;turchese;verde;viola',
+  Film: 'Alien;Amadeus;Avatar;Bambi;Casablanca;Cenerentola;Dune;Dumbo;E.T.;Fantasia;Frozen;Gladiatore;Grease;Inception;Joker;King Kong;La vita è bella;Matrix;Mulan;Nosferatu;Oppenheimer;Psycho;Quo vadis;Rocky;Shrek;Titanic;Up;Vertigo;WALL-E;X-Men;Yesterday;Zootropolis',
+  Cantanti: 'Achille Lauro;Adele;Al Bano;Annalisa;Beyoncé;Bocelli;Claudio Baglioni;Cesare Cremonini;Dua Lipa;Elisa;Elodie;Eros Ramazzotti;Franco Battiato;Giorgia;Gianna Nannini;Jovanotti;Laura Pausini;Ligabue;Madonna;Måneskin;Mina;Nek;Olly;Pino Daniele;Queen;Renato Zero;Shakira;Tiziano Ferro;Ultimo;Vasco Rossi;Zucchero',
+  Sport: 'arrampicata;atletica;badminton;basket;beach volley;boxe;calcio;canottaggio;ciclismo;curling;danza;equitazione;formula 1;ginnastica;golf;hockey;judo;karate;lotta;nuoto;orienteering;pallanuoto;pallavolo;pugilato;quinoa;rugby;scherma;sci;snowboard;tennis;triathlon;vela;volley;wrestling',
+  Cibo: 'arancia;ananas;aragosta;banana;barbabietola;biscotto;broccoli;burrata;cannelloni;carciofo;carota;castagna;ciambella;cicoria;cioccolato;focaccia;formaggio;fragola;gnocchi;insalata;lasagna;limone;mandarino;mela;melanzana;minestrone;mozzarella;noce;oliva;omelette;panettone;pasta;pera;pesca;pizza;polenta;quinoa;radicchio;ravioli;risotto;salame;spaghetti;tiramisù;uva;zuppa;zucchina'
+};
+
+function makeComputerAnswers(categories, letter) {
+  const answers = {};
+  for (const category of categories) {
+    const entries = (CPU_DICTIONARY[category] || '')
+      .split(';')
+      .map(word => word.trim())
+      .filter(word => word && word[0].toLocaleUpperCase('it-IT') === letter);
+    answers[category] = entries.length
+      ? entries[Math.floor(Math.random() * entries.length)]
+      : '';
+  }
+  return answers;
 }
 
 // ------------------------------------------------------------
@@ -435,6 +485,7 @@ function hostStartRound() {
   for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
 
   const cats = activeCategories();
+  S.cpuAnswers = S.isCpuGame ? makeComputerAnswers(cats, letter) : {};
 
   // Avvia prima la schermata locale: la partita dell'host non deve
   // dipendere dalla disponibilità momentanea del canale multiplayer.
@@ -620,6 +671,7 @@ async function scoreRound() {
   const players = [
     { name: S.name, answers: S.answers },
     ...[...S.peers.values()].map(p => ({ name: p.name, answers: p.answers || {} })),
+    ...(S.isCpuGame ? [{ name: 'Computer', answers: S.cpuAnswers }] : []),
   ];
 
   const cats = activeCategories();
@@ -767,6 +819,7 @@ function resetForNewGame() {
   clearTimeout(S.forceCloseTimeout);
   S.round = { num: 0, letter: '', active: false, prevLetter: '', timer: 0, remaining: 0, scoring: false };
   S.answers = {};
+  S.cpuAnswers = {};
   S.ready = false;
   S.scores.clear();
   for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
