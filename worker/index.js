@@ -15,6 +15,7 @@ const WIKIDATA_CLASSES = {
   "mestieri": ["Q12737077"],
   "sport": ["Q349"],
   "alimenti": ["Q2095"],
+  "cibo": ["Q2095"],
   "cose": ["Q223557"]
 };
 
@@ -275,13 +276,13 @@ async function suggestAnswers(letter, categories, difficulty, apiKey) {
     }
 
     if (body.action === "suggest") {
-      const letter = String(body.letter || "").trim().toLocaleUpperCase("it");
+      const suggestionLetter = String(body.letter || "").trim().toLocaleUpperCase("it");
       const categories = Array.isArray(body.categories) ? body.categories.slice(0, 12).map(v => String(v).trim()).filter(v => v && v.length <= 60) : [];
       const difficulty = ["easy", "medium", "hard"].includes(body.difficulty) ? body.difficulty : "medium";
-      if (!/^[A-Z]$/.test(letter) || !categories.length) {
+      if (!/^[A-Z]$/.test(suggestionLetter) || !categories.length) {
         return jsonResponse({ error: "Invalid letter or categories" }, 400);
       }
-      const answers = await suggestAnswers(letter, categories, difficulty, env && env.GEMINI_API_KEY);
+      const answers = await suggestAnswers(suggestionLetter, categories, difficulty, env && env.GEMINI_API_KEY);
       return jsonResponse({ answers: answers, source: "wikidata+gemini" }, 200);
     }
 
