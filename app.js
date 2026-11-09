@@ -33,6 +33,7 @@ const S = {
     prevLetter: '',
     timer: 0,
     remaining: 0,
+    scoring: false,
   },
   interval: null,
 
@@ -427,6 +428,7 @@ function hostStartRound() {
   S.round.prevLetter = letter;
   S.round.timer = S.config.timer;
   S.round.active = true;
+  S.round.scoring = false;
   S.ready = false;
   clearTimeout(S.forceCloseTimeout);
 
@@ -545,15 +547,13 @@ D.btnDone.addEventListener('click', () => {
   showWaitingForResults();
   renderPlayers();
 
-  stopTimer();
-  D.roundTimer.textContent = fmt(S.round.remaining);
-
+  // Il timer continua a scorrere anche dopo "Ho finito":
+  // il controllo delle parole parte solo allo zero dell'host.
   if (!S.isHost && S.send.answers) {
     S.send.answers({ name: S.name, answers: S.answers });
     S.send.done({ name: S.name, answers: S.answers });
   } else if (S.isHost) {
     checkAllReady();
-    scheduleForceClose();
   }
 
   toast('Hai finito! Attendo gli altri...');
@@ -563,22 +563,23 @@ D.btnDone.addEventListener('click', () => {
 // CONTROLLO TUTTI PRONTI (host)
 // ------------------------------------------------------------
 function checkAllReady() {
-  if (!S.isHost || !S.round.active) return;
+  // Non avviare mai il controllo prima che il timer dell'host sia arrivato a zero.
+  if (!S.isHost || S.round.active || S.round.remaining > 0 || S.round.scoring) return;
   if (!S.ready) return;
   for (const p of S.peers.values()) if (!p.ready) return;
-  S.round.active = false;
+  S.round.scoring = true;
   stopTimer();
   clearTimeout(S.forceCloseTimeout);
-  toast('Tutti pronti, calcolo...');
+  toast('Tempo terminato: controllo delle risposte...');
   scoreRound();
 }
 
 function scheduleForceClose() {
   clearTimeout(S.forceCloseTimeout);
   S.forceCloseTimeout = setTimeout(() => {
-    if (S.isHost && S.round.active && S.ready) {
-      toast('Timeout attesa, chiudo il round...', 3000);
-      S.round.active = false;
+    if (S.isHost && !S.round.active && S.round.remaining <= 0 && S.ready && !S.round.scoring) {
+      S.round.scoring = true;
+      toast('Tempo di attesa terminato: controllo delle risposte...', 3000);
       stopTimer();
       scoreRound();
     }
@@ -591,6 +592,7 @@ function scheduleForceClose() {
 function onTimeUp() {
   if (!S.round.active) return;
   S.round.active = false;
+  S.round.remaining = 0;
   stopTimer();
   clearTimeout(S.forceCloseTimeout);
 
@@ -746,7 +748,7 @@ function renderResults(results) {
 function resetForNewGame() {
   stopTimer();
   clearTimeout(S.forceCloseTimeout);
-  S.round = { num: 0, letter: '', active: false, prevLetter: '', timer: 0, remaining: 0 };
+  S.round = { num: 0, letter: '', active: false, prevLetter: '', timer: 0, remaining: 0, scoring: false };
   S.answers = {};
   S.ready = false;
   S.scores.clear();
