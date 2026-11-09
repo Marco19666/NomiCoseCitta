@@ -44,6 +44,7 @@ const S = {
 
   scores: new Map(),
   personalGameSaved: false,
+  usedLetters: [],
 
   forceCloseTimeout: null,
 };
@@ -141,8 +142,10 @@ function seedRandom(seed) {
   return x / 4294967296;
 }
 
-function pickLetter(seed, prev) {
-  const pool = ALPHABET.split('').filter(l => l !== prev);
+function pickLetter(seed, usedLetters = []) {
+  const used = new Set(usedLetters);
+  const pool = ALPHABET.split('').filter(letter => !used.has(letter));
+  if (!pool.length) return '';
   return pool[Math.floor(seedRandom(seed) * pool.length)];
 }
 
@@ -472,8 +475,14 @@ D.btnStart.addEventListener('click', () => {
 });
 
 function hostStartRound() {
+  if (S.usedLetters.length >= ALPHABET.length) {
+    toast('Sono state utilizzate tutte le lettere disponibili. Avvia una nuova partita.');
+    return;
+  }
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-  const letter = pickLetter(seed, S.round.prevLetter);
+  const letter = pickLetter(seed, S.usedLetters);
+  if (!letter) return;
+  S.usedLetters.push(letter);
 
   S.round.num += 1;
   S.round.letter = letter;
@@ -512,6 +521,7 @@ function hostStartRound() {
 function clientStartRound(data) {
   S.round.num = data.num;
   S.round.letter = data.letter;
+  if (!S.usedLetters.includes(data.letter)) S.usedLetters.push(data.letter);
   S.round.timer = data.timer;
   S.round.active = true;
   S.ready = false;
@@ -811,8 +821,11 @@ function recordPersonalGameStats() {
   try { stats = JSON.parse(localStorage.getItem(PERSONAL_STATS_KEY) || '{}'); } catch (_) {}
   stats.games = (Number(stats.games) || 0) + 1;
   stats.points = (Number(stats.points) || 0) + (Number(mine.total) || 0);
-  if ((Number(mine.total) || 0) === best && tied.length === 1) stats.wins = (Number(stats.wins) || 0) + 1;
-  else if ((Number(mine.total) || 0) === best) stats.draws = (Number(stats.draws) || 0) + 1;
+  // Una parità in testa conta come vittoria condivisa e viene indicata anche tra i pareggi.
+  if ((Number(mine.total) || 0) === best) {
+    stats.wins = (Number(stats.wins) || 0) + 1;
+    if (tied.length > 1) stats.draws = (Number(stats.draws) || 0) + 1;
+  }
   try {
     localStorage.setItem(PERSONAL_STATS_KEY, JSON.stringify(stats));
     S.personalGameSaved = true;
@@ -868,6 +881,7 @@ function resetForNewGame() {
   S.ready = false;
   S.scores.clear();
   S.personalGameSaved = false;
+  S.usedLetters = [];
   for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
   D.btnNext.hidden = true;
   if (D.btnNewGame) D.btnNewGame.hidden = true;
