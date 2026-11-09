@@ -11,7 +11,7 @@ const APP_ID = 'nomi-cose-citta-v1';
 const ALPHABET = 'ABCDEFGILMNOPRSTUVXZ';
 const STORAGE_KEY_NAME = 'ncc_player_name';
 const FIXED_CATEGORIES = ['Cose', 'Nomi', 'Città'];
-const WORKER_URL = 'https://muddy-grass-6726.chiccovision.workers.dev';
+const WORKER_URL = 'https://autumn-glade-9f0e.chiccovision.workers.dev/';
 const STOP_BONUS = 15;
 
 // ------------------------------------------------------------
