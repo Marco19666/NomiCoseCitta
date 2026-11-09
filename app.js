@@ -87,6 +87,7 @@ const D = {
   standings: $('standingsContent'),
   results: $('resultsContent'),
   btnNext: $('btnNextRound'),
+  btnNewGame: $('btnNewGame'),
 
   toast: $('toast'),
 };
@@ -193,9 +194,10 @@ function initRoom(isHost, roomCode) {
   const [sendRoundStart, onRoundStart] = S.room.makeAction('round-start');
   const [sendResults, onResults] = S.room.makeAction('results');
   const [sendConfig, onConfig] = S.room.makeAction('config');
+  const [sendNewGame, onNewGame] = S.room.makeAction('new-game');
 
   S.send = { presence: sendPresence, answers: sendAnswers, done: sendDone,
-             roundStart: sendRoundStart, results: sendResults, config: sendConfig };
+             roundStart: sendRoundStart, results: sendResults, config: sendConfig, newGame: sendNewGame };
 
   const announce = () => sendPresence({ name: S.name, isHost: S.isHost });
 
@@ -285,6 +287,11 @@ function initRoom(isHost, roomCode) {
     clientStartRound(data);
   });
 
+  onNewGame(() => {
+    if (S.isHost) return;
+    resetForNewGame();
+  });
+
   onResults((data) => {
     if (S.isHost) return;
     if (Array.isArray(data.scores)) S.scores = new Map(data.scores);
@@ -292,6 +299,7 @@ function initRoom(isHost, roomCode) {
     renderResults(data.results);
     D.resultsTitle.textContent = data.isLast ? 'Classifica finale' : 'Risultati manche';
     D.btnNext.hidden = true;
+    if (D.btnNewGame) D.btnNewGame.hidden = !data.isLast;
     showScreen('results');
   });
 
@@ -586,7 +594,9 @@ function onTimeUp() {
   stopTimer();
   clearTimeout(S.forceCloseTimeout);
 
+  showWaitingForResults();
   if (S.isHost) {
+    S.ready = true;
     scoreRound();
   } else {
     S.round.remaining = 0;
@@ -660,6 +670,7 @@ async function scoreRound() {
   renderResults(results);
   D.resultsTitle.textContent = isLast ? 'Classifica finale' : 'Risultati manche';
   D.btnNext.hidden = !S.isHost || isLast;
+  if (D.btnNewGame) D.btnNewGame.hidden = !isLast;
   showScreen('results');
 }
 
@@ -731,6 +742,29 @@ function renderResults(results) {
 // ------------------------------------------------------------
 // PROSSIMA MANCHE
 // ------------------------------------------------------------
+function resetForNewGame() {
+  stopTimer();
+  clearTimeout(S.forceCloseTimeout);
+  S.round = { num: 0, letter: '', active: false, prevLetter: '', timer: 0, remaining: 0 };
+  S.answers = {};
+  S.ready = false;
+  S.scores.clear();
+  for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
+  D.btnNext.hidden = true;
+  if (D.btnNewGame) D.btnNewGame.hidden = true;
+  D.btnStart.disabled = !S.isHost;
+  D.configCard.hidden = false;
+  D.joinCard.hidden = true;
+  renderPlayers();
+  showScreen('lobby');
+}
+
+D.btnNewGame?.addEventListener('click', () => {
+  if (!S.isHost) return;
+  resetForNewGame();
+  if (S.send.newGame) S.send.newGame({});
+});
+
 D.btnNext.addEventListener('click', () => {
   if (!S.isHost) return;
   if (S.round.num >= S.config.rounds) return;
