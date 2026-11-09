@@ -58,7 +58,7 @@ Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza 
 
     const userPrompt = `La parola "${word}" è valida come "${category || 'Cose'}" che inizia con la lettera "${letter}"?`;
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
 
     try {
       const geminiRes = await fetch(geminiUrl, {
