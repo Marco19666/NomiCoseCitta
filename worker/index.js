@@ -1,127 +1,109 @@
 // ============================================================
-// Cloudflare Worker — Gemini come unico arbitro
+// Cloudflare Worker — proxy Gemini per verifica parole (v2)
 // ============================================================
-// Riceve POST { word, letter, category }
-// Risponde { valid: true|false, raw: "..." }
-// Richiede il secret GEMINI_API_KEY
 
 export default {
   async fetch(request, env) {
-    const cors = {
+    const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     };
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: cors });
+      return new Response(null, { status: 204, headers: corsHeaders });
     }
 
     if (request.method !== 'POST') {
-      return reply({ error: 'Method not allowed' }, 405, cors);
+      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+        status: 405,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     let body;
     try {
       body = await request.json();
     } catch {
-      return reply({ error: 'Invalid JSON' }, 400, cors);
+      return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    const word = String(body?.word || '').trim();
-    const letter = String(body?.letter || '').trim().toUpperCase();
-    const category = String(body?.category || 'Cose').trim();
-
+    const { word, letter, category } = body || {};
     if (!word || !letter) {
-      return reply({ error: 'Missing word or letter' }, 400, cors);
+      return new Response(JSON.stringify({ error: 'Missing word or letter' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const apiKey = env.GEMINI_API_KEY;
     if (!apiKey) {
-      return reply({ error: 'GEMINI_API_KEY not configured' }, 500, cors);
+      return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    const prompt = buildPrompt(word, letter, category);
+    const systemInstruction = `Sei un verificatore per il gioco italiano "Nomi Cose Città".
+Il tuo unico compito è determinare se una parola è valida per una specifica categoria e lettera iniziale.
+Criteri di validità:
+- deve essere una parola italiana esistente e di senso compiuto;
+- deve appartenere alla categoria richiesta (es. "Città" = città italiana o estera riconosciuta; "Animali" = specie animale; "Mestieri" = professione; "Colori" = colore; "Film" = titolo di film; "Cantanti" = nome d'arte o cognome di cantante; "Sport" = disciplina sportiva; "Cibo" = alimento o piatto; "Cose" = oggetto o concetto concreto; "Nomi" = nome proprio di persona);
+- deve iniziare con la lettera indicata (indipendentemente da maiuscole/minuscole);
+- NON deve essere una parola inventata, un acronimo privo di senso, una frase, o una parola di una sola lettera.
+Rispondi SEMPRE e SOLO con "sì" o "no", in minuscolo, senza spiegazioni, senza punteggiatura aggiuntiva, senza altro testo.`;
 
-    const geminiUrl =
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' +
-      encodeURIComponent(apiKey);
+    const userPrompt = `La parola "${word}" è valida come "${category || 'Cose'}" che inizia con la lettera "${letter}"?`;
 
-    let geminiRes;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+
     try {
-      geminiRes = await fetch(geminiUrl, {
+      const geminiRes = await fetch(geminiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          systemInstruction: {
+            parts: [{ text: systemInstruction }]
+          },
+          contents: [
+            { role: 'user', parts: [{ text: userPrompt }] }
+          ],
           generationConfig: {
             temperature: 0,
-            maxOutputTokens: 4,
+            maxOutputTokens: 5,
           },
         }),
       });
+
+      if (!geminiRes.ok) {
+        const errText = await geminiRes.text();
+        return new Response(JSON.stringify({
+          error: 'Gemini API error',
+          status: geminiRes.status,
+          detail: errText.slice(0, 200),
+        }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const geminiData = await geminiRes.json();
+      const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const normalized = text.trim().toLowerCase();
+      const valid = normalized.startsWith('sì') || normalized.startsWith('si');
+
+      return new Response(JSON.stringify({ valid }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     } catch (e) {
-      return reply({ error: 'Network error', detail: String(e) }, 502, cors);
+      return new Response(JSON.stringify({ error: 'Fetch failed', detail: String(e) }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
-
-    if (!geminiRes.ok) {
-      const detail = await geminiRes.text();
-      return reply(
-        { error: 'Gemini error', status: geminiRes.status, detail: detail.slice(0, 200) },
-        502,
-        cors
-      );
-    }
-
-    let geminiData;
-    try {
-      geminiData = await geminiRes.json();
-    } catch {
-      return reply({ error: 'Invalid Gemini JSON' }, 502, cors);
-    }
-
-    const raw =
-      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const answer = raw.trim().toLowerCase();
-    const valid = /^s[iì]/.test(answer);
-
-    return reply({ valid, raw: answer }, 200, cors);
   },
 };
-
-// ------------------------------------------------------------
-// Prompt per Gemini
-// ------------------------------------------------------------
-function buildPrompt(word, letter, category) {
-  return `Sei l'arbitro del gioco italiano "Nomi Cose Città".
-Devi decidere se la parola "${word}" è valida come "${category}" e inizia con la lettera "${letter}".
-
-Regole:
-- La parola deve essere una parola italiana esistente e di senso compiuto.
-- Deve appartenere alla categoria "${category}".
-  - Cose: oggetto, concetto concreto, cosa materiale o astratta.
-  - Nomi: nome proprio di persona (maschile o femminile).
-  - Città: città italiana o estera riconosciuta.
-  - Animali: specie animale.
-  - Mestieri: professione o lavoro riconosciuto.
-  - Colori: colore.
-  - Film: titolo di un film conosciuto.
-  - Cantanti: nome o cognome di un cantante conosciuto.
-  - Sport: disciplina sportiva.
-  - Cibo: alimento, piatto o bevanda.
-- Deve iniziare con la lettera "${letter}" (maiuscola o minuscola è indifferente).
-- NON sono valide: parole inventate, acronimi senza senso, frasi, nomi di una sola lettera, parole generiche senza significato nella categoria.
-
-Rispondi SOLO con "sì" se la parola è valida, oppure "no" se non lo è.
-Nessun'altra parola. Nessuna spiegazione. Nessuna punteggiatura.`;
-}
-
-// ------------------------------------------------------------
-// Helper risposta JSON
-// ------------------------------------------------------------
-function reply(obj, status, headers) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { ...headers, 'Content-Type': 'application/json' },
-  });
-}
