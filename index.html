@@ -125,6 +125,22 @@
           </div>
         </div>
 
+        <div class="field-group" id="cpuDifficultyOptions" hidden>
+          <label class="field-label">Difficoltà computer</label>
+          <div class="chips">
+            <label class="chip chip-selectable">
+              <input type="radio" name="cpuDifficulty" value="easy" class="chip-check"> Facile
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="cpuDifficulty" value="medium" class="chip-check" checked> Medio
+            </label>
+            <label class="chip chip-selectable">
+              <input type="radio" name="cpuDifficulty" value="hard" class="chip-check"> Difficile
+            </label>
+          </div>
+          <p class="hint">Il computer cerca risposte online usando Wikidata e, quando serve, Gemini.</p>
+        </div>
+
         <div class="field-group">
           <label class="field-label">Giocatori <span id="playerCount" class="muted">(0)</span></label>
           <ul class="player-list" id="playerList"></ul>
