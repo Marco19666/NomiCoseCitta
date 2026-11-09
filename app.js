@@ -200,8 +200,15 @@ function initRoom(isHost, roomCode) {
   const announce = () => sendPresence({ name: S.name, isHost: S.isHost });
 
   onPresence((data, peerId) => {
+    // I messaggi presence possono arrivare più volte: non azzerare
+    // risposte e stato "pronto" già ricevuti durante la manche.
+    const previous = S.peers.get(peerId) || {};
     S.peers.set(peerId, {
-      name: data.name, isHost: data.isHost, ready: false, answers: null,
+      ...previous,
+      name: data.name || previous.name,
+      isHost: !!data.isHost,
+      ready: previous.ready || false,
+      answers: previous.answers || null,
     });
     renderPlayers();
     if (S.isHost) sendConfig({ config: S.config }, peerId);
@@ -253,9 +260,16 @@ function initRoom(isHost, roomCode) {
     if (!name) return;
     if (normName(name) === normName(S.name)) {
       S.ready = true;
+      if (data.answers && typeof data.answers === 'object') S.answers = data.answers;
     } else {
       for (const p of S.peers.values()) {
-        if (normName(p.name) === normName(name)) { p.ready = true; break; }
+        if (normName(p.name) === normName(name)) {
+          p.ready = true;
+          // Il pacchetto "done" contiene anche le risposte: non dipendiamo
+          // dall'ordine di consegna tra due azioni Trystero distinte.
+          if (data.answers && typeof data.answers === 'object') p.answers = data.answers;
+          break;
+        }
       }
     }
     renderPlayers();
@@ -513,7 +527,7 @@ D.btnDone.addEventListener('click', () => {
 
   if (!S.isHost && S.send.answers) {
     S.send.answers({ name: S.name, answers: S.answers });
-    S.send.done({ name: S.name });
+    S.send.done({ name: S.name, answers: S.answers });
   } else if (S.isHost) {
     checkAllReady();
     scheduleForceClose();
