@@ -1,5 +1,5 @@
 // ============================================================
-// NOMI COSE CITTÀ — app.js (v10, senza bonus, senza X)
+// NOMI COSE CITTÀ — app.js (v11, con debug e fallback)
 // ============================================================
 
 import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
@@ -39,7 +39,9 @@ const S = {
   answers: {},
   ready: false,
 
-  scores: new Map(), // nome -> { name, total }
+  scores: new Map(),
+
+  forceCloseTimeout: null,
 };
 
 // ------------------------------------------------------------
@@ -144,6 +146,10 @@ function fmt(s) {
   return m > 0 ? `${m}:${String(r).padStart(2, '0')}` : String(r);
 }
 
+function normName(n) {
+  return String(n || '').trim().toLowerCase();
+}
+
 function ensureName() {
   let n = (D.inputName?.value || '').trim();
   if (!n) n = localStorage.getItem(STORAGE_NAME) || '';
@@ -223,25 +229,33 @@ function initRoom(isHost, roomCode) {
 
   onAnswers((data) => {
     if (!S.isHost) return;
+    console.log('HOST onAnswers', data);
+    toast('Risposte da ' + (data?.name || '?'), 1500);
     const name = data?.name;
     if (!name) return;
     const answers = data.answers || {};
-    if (name === S.name) { S.answers = answers; return; }
+    if (normName(name) === normName(S.name)) { S.answers = answers; return; }
     for (const p of S.peers.values()) {
-      if (p.name === name) { p.answers = answers; p.ready = true; break; }
+      if (normName(p.name) === normName(name)) {
+        p.answers = answers;
+        p.ready = true;
+        break;
+      }
     }
     renderPlayers();
   });
 
   onDone((data) => {
     if (!S.isHost) return;
+    console.log('HOST onDone', data);
+    toast('Done da ' + (data?.name || '?'), 1500);
     const name = data?.name;
     if (!name) return;
-    if (name === S.name) {
+    if (normName(name) === normName(S.name)) {
       S.ready = true;
     } else {
       for (const p of S.peers.values()) {
-        if (p.name === name) { p.ready = true; break; }
+        if (normName(p.name) === normName(name)) { p.ready = true; break; }
       }
     }
     renderPlayers();
@@ -383,6 +397,7 @@ function hostStartRound() {
   S.round.timer = S.config.timer;
   S.round.active = true;
   S.ready = false;
+  clearTimeout(S.forceCloseTimeout);
 
   for (const p of S.peers.values()) { p.ready = false; p.answers = null; }
 
@@ -478,6 +493,7 @@ D.btnDone.addEventListener('click', () => {
     S.send.done({ name: S.name });
   } else if (S.isHost) {
     checkAllReady();
+    scheduleForceClose();
   }
 
   toast('Hai finito! Attendo gli altri...');
@@ -492,8 +508,21 @@ function checkAllReady() {
   for (const p of S.peers.values()) if (!p.ready) return;
   S.round.active = false;
   stopTimer();
+  clearTimeout(S.forceCloseTimeout);
   toast('Tutti pronti, calcolo...');
   scoreRound();
+}
+
+function scheduleForceClose() {
+  clearTimeout(S.forceCloseTimeout);
+  S.forceCloseTimeout = setTimeout(() => {
+    if (S.isHost && S.round.active && S.ready) {
+      toast('Timeout attesa, chiudo il round...', 3000);
+      S.round.active = false;
+      stopTimer();
+      scoreRound();
+    }
+  }, 6000);
 }
 
 // ------------------------------------------------------------
@@ -503,6 +532,7 @@ function onTimeUp() {
   if (!S.round.active) return;
   S.round.active = false;
   stopTimer();
+  clearTimeout(S.forceCloseTimeout);
 
   if (S.isHost) {
     scoreRound();
@@ -516,7 +546,7 @@ function onTimeUp() {
 // PUNTEGGI (host)
 // ------------------------------------------------------------
 async function scoreRound() {
-  await new Promise(r => setTimeout(r, 2500));
+  await new Promise(r => setTimeout(r, 4000));
 
   const players = [
     { name: S.name, answers: S.answers },
@@ -591,12 +621,19 @@ async function askGemini(word, letter, category) {
       body: JSON.stringify({ word, letter, category }),
     });
     if (!res.ok) {
-      console.warn('Worker HTTP error', res.status);
+      const errText = await res.text();
+      toast('Worker errore ' + res.status, 4000);
+      console.warn('Worker error:', res.status, errText);
       return false;
     }
     const data = await res.json();
+    if (data.error) {
+      toast('Worker: ' + data.error, 4000);
+      return false;
+    }
     return data.valid === true;
   } catch (e) {
+    toast('Rete: ' + e.message, 4000);
     console.warn('Worker fetch failed', e);
     return false;
   }
