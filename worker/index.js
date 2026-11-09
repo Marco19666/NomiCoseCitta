@@ -78,11 +78,16 @@ La parola è valida?
     try {
       const result = await env.AI.run('@cf/zai-org/glm-4.7-flash', {
         prompt,
-        max_tokens: 8,
+        max_completion_tokens: 8,
         temperature: 0,
       });
 
-      const responseText = String(result?.response || '')
+      const rawText =
+        result?.choices?.[0]?.message?.content ??
+        result?.response ??
+        '';
+
+      const responseText = String(rawText)
         .trim()
         .toLocaleLowerCase('it-IT')
         .normalize('NFC')
@@ -100,6 +105,7 @@ La parola è valida?
       return jsonResponse({
         error: 'Unexpected Cloudflare AI response',
         response: responseText.slice(0, 200),
+        modelOutput: result,
       }, 502);
     } catch (error) {
       return jsonResponse({
