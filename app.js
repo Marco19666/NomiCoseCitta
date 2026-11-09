@@ -800,3 +800,16 @@ D.btnNext.addEventListener('click', () => {
     showScreen('lobby');
   }
 })();
+
+
+// La schermata iniziale è solo una breve introduzione: non blocca l'accesso al gioco.
+(function dismissSplash() {
+  const splash = document.getElementById('splashScreen');
+  if (!splash) return;
+  const hide = () => {
+    splash.classList.add('splash-hidden');
+    setTimeout(() => splash.remove(), 500);
+  };
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) hide();
+  else setTimeout(hide, 1250);
+})();
