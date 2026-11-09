@@ -1,127 +1,617 @@
 // ============================================================
-// Cloudflare Worker — Gemini come unico arbitro
+// NOMI COSE CITTÀ — app.js (v12, solo timer)
 // ============================================================
-// Riceve POST { word, letter, category }
-// Risponde { valid: true|false, raw: "..." }
-// Richiede il secret GEMINI_API_KEY
 
-export default {
-  async fetch(request, env) {
-    const cors = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    };
+import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/torrent/+esm';
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: cors });
-    }
+// ------------------------------------------------------------
+// CONFIGURAZIONE
+// ------------------------------------------------------------
+const APP_ID = 'nomi-cose-citta-v1';
+const ALPHABET = 'ABCDEFGILMNOPRSTUVZ';
+const STORAGE_NAME = 'ncc_player_name';
+const FIXED_CATEGORIES = ['Cose', 'Nomi', 'Città'];
+const WORKER_URL = 'https://muddy-grass-6726.chiccovision.workers.dev';
 
-    if (request.method !== 'POST') {
-      return reply({ error: 'Method not allowed' }, 405, cors);
-    }
+// ------------------------------------------------------------
+// STATO
+// ------------------------------------------------------------
+const S = {
+  name: '',
+  isHost: false,
+  roomCode: '',
+  room: null,
+  send: {},
+  peers: new Map(),
 
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return reply({ error: 'Invalid JSON' }, 400, cors);
-    }
+  config: { extras: [], timer: 60, rounds: 5 },
 
-    const word = String(body?.word || '').trim();
-    const letter = String(body?.letter || '').trim().toUpperCase();
-    const category = String(body?.category || 'Cose').trim();
-
-    if (!word || !letter) {
-      return reply({ error: 'Missing word or letter' }, 400, cors);
-    }
-
-    const apiKey = env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return reply({ error: 'GEMINI_API_KEY not configured' }, 500, cors);
-    }
-
-    const prompt = buildPrompt(word, letter, category);
-
-    const geminiUrl =
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' +
-      encodeURIComponent(apiKey);
-
-    let geminiRes;
-    try {
-      geminiRes = await fetch(geminiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0,
-            maxOutputTokens: 4,
-          },
-        }),
-      });
-    } catch (e) {
-      return reply({ error: 'Network error', detail: String(e) }, 502, cors);
-    }
-
-    if (!geminiRes.ok) {
-      const detail = await geminiRes.text();
-      return reply(
-        { error: 'Gemini error', status: geminiRes.status, detail: detail.slice(0, 200) },
-        502,
-        cors
-      );
-    }
-
-    let geminiData;
-    try {
-      geminiData = await geminiRes.json();
-    } catch {
-      return reply({ error: 'Invalid Gemini JSON' }, 502, cors);
-    }
-
-    const raw =
-      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const answer = raw.trim().toLowerCase();
-    const valid = /^s[iì]/.test(answer);
-
-    return reply({ valid, raw: answer }, 200, cors);
+  round: {
+    num: 0,
+    letter: '',
+    active: false,
+    prevLetter: '',
+    timer: 0,
+    remaining: 0,
   },
+  interval: null,
+
+  answers: {},
+
+  scores: new Map(),
 };
 
 // ------------------------------------------------------------
-// Prompt per Gemini
+// DOM
 // ------------------------------------------------------------
-function buildPrompt(word, letter, category) {
-  return `Sei l'arbitro del gioco italiano "Nomi Cose Città".
-Devi decidere se la parola "${word}" è valida come "${category}" e inizia con la lettera "${letter}".
+const $ = (id) => document.getElementById(id);
+const D = {
+  screenLobby: $('screenLobby'),
+  screenGame: $('screenGame'),
+  screenResults: $('screenResults'),
 
-Regole:
-- La parola deve essere una parola italiana esistente e di senso compiuto.
-- Deve appartenere alla categoria "${category}".
-  - Cose: oggetto, concetto concreto, cosa materiale o astratta.
-  - Nomi: nome proprio di persona (maschile o femminile).
-  - Città: città italiana o estera riconosciuta.
-  - Animali: specie animale.
-  - Mestieri: professione o lavoro riconosciuto.
-  - Colori: colore.
-  - Film: titolo di un film conosciuto.
-  - Cantanti: nome o cognome di un cantante conosciuto.
-  - Sport: disciplina sportiva.
-  - Cibo: alimento, piatto o bevanda.
-- Deve iniziare con la lettera "${letter}" (maiuscola o minuscola è indifferente).
-- NON sono valide: parole inventate, acronimi senza senso, frasi, nomi di una sola lettera, parole generiche senza significato nella categoria.
+  joinCard: $('joinCard'),
+  configCard: $('configCard'),
+  inputName: $('inputPlayerName'),
+  btnCreate: $('btnCreateRoom'),
+  inputCode: $('inputRoomCode'),
+  btnJoin: $('btnJoinRoom'),
 
-Rispondi SOLO con "sì" se la parola è valida, oppure "no" se non lo è.
-Nessun'altra parola. Nessuna spiegazione. Nessuna punteggiatura.`;
+  extraCats: $('extraCategories'),
+  timerOpts: $('timerOptions'),
+  roundsOpts: $('roundsOptions'),
+  playerList: $('playerList'),
+  playerCount: $('playerCount'),
+  btnShare: $('btnShareWa'),
+  btnStart: $('btnStartGame'),
+  hostHint: $('hostHint'),
+
+  roomBadge: $('roomBadge'),
+  roomCode: $('roomCode'),
+  connDot: $('connDot'),
+
+  roundLetter: $('roundLetter'),
+  roundTimer: $('roundTimer'),
+  roundTimerBox: $('roundTimerBox'),
+  roundNumber: $('roundNumber'),
+  roundSeed: $('roundSeed'),
+  categoryInputs: $('categoryInputs'),
+  gamePlayerList: $('gamePlayerList'),
+
+  resultsTitle: $('resultsTitle'),
+  standings: $('standingsContent'),
+  results: $('resultsContent'),
+  btnNext: $('btnNextRound'),
+
+  toast: $('toast'),
+};
+
+// ------------------------------------------------------------
+// UTILITY
+// ------------------------------------------------------------
+function toast(msg, ms = 2200) {
+  D.toast.textContent = msg;
+  D.toast.hidden = false;
+  D.toast.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => {
+    D.toast.classList.remove('show');
+    setTimeout(() => { D.toast.hidden = true; }, 250);
+  }, ms);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function showScreen(which) {
+  for (const el of [D.screenLobby, D.screenGame, D.screenResults]) {
+    if (el) el.classList.remove('active');
+  }
+  if (which === 'lobby' && D.screenLobby) D.screenLobby.classList.add('active');
+  if (which === 'game' && D.screenGame) D.screenGame.classList.add('active');
+  if (which === 'results' && D.screenResults) D.screenResults.classList.add('active');
+}
+
+function codeRoom() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const buf = new Uint8Array(6);
+  crypto.getRandomValues(buf);
+  return [...buf].map(b => chars[b % chars.length]).join('');
+}
+
+function seedRandom(seed) {
+  let x = seed >>> 0 || 1;
+  x ^= x << 13; x >>>= 0;
+  x ^= x >> 17;
+  x ^= x << 5;  x >>>= 0;
+  return x / 4294967296;
+}
+
+function pickLetter(seed, prev) {
+  const pool = ALPHABET.split('').filter(l => l !== prev);
+  return pool[Math.floor(seedRandom(seed) * pool.length)];
+}
+
+function fmt(s) {
+  s = Math.max(0, s);
+  const m = Math.floor(s / 60), r = s % 60;
+  return m > 0 ? `${m}:${String(r).padStart(2, '0')}` : String(r);
+}
+
+function normName(n) {
+  return String(n || '').trim().toLowerCase();
+}
+
+function ensureName() {
+  let n = (D.inputName?.value || '').trim();
+  if (!n) n = localStorage.getItem(STORAGE_NAME) || '';
+  if (!n) n = 'Giocatore ' + Math.floor(100 + Math.random() * 900);
+  n = n.slice(0, 20);
+  localStorage.setItem(STORAGE_NAME, n);
+  S.name = n;
+  return n;
+}
+
+function activeCategories() {
+  return [...FIXED_CATEGORIES, ...S.config.extras];
 }
 
 // ------------------------------------------------------------
-// Helper risposta JSON
+// TRYSTERO
 // ------------------------------------------------------------
-function reply(obj, status, headers) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { ...headers, 'Content-Type': 'application/json' },
+function initRoom(isHost, roomCode) {
+  S.isHost = isHost;
+  S.roomCode = roomCode;
+  S.room = joinRoom({ appId: APP_ID }, roomCode);
+
+  D.roomBadge.hidden = false;
+  D.roomCode.textContent = roomCode;
+  D.connDot.classList.add('online');
+  D.joinCard.hidden = true;
+  D.configCard.hidden = false;
+  if (isHost) {
+    D.btnStart.disabled = false;
+    D.btnShare.hidden = false;
+    D.hostHint.hidden = true;
+  } else {
+    D.btnStart.disabled = true;
+    D.btnShare.hidden = true;
+    D.hostHint.hidden = false;
+  }
+
+  const [sendPresence, onPresence] = S.room.makeAction('presence');
+  const [sendAnswers, onAnswers] = S.room.makeAction('answers');
+  const [sendRoundStart, onRoundStart] = S.room.makeAction('round-start');
+  const [sendResults, onResults] = S.room.makeAction('results');
+  const [sendConfig, onConfig] = S.room.makeAction('config');
+
+  S.send = { presence: sendPresence, answers: sendAnswers,
+             roundStart: sendRoundStart, results: sendResults, config: sendConfig };
+
+  const announce = () => sendPresence({ name: S.name, isHost: S.isHost });
+
+  onPresence((data, peerId) => {
+    S.peers.set(peerId, {
+      name: data.name, isHost: data.isHost, answers: null,
+    });
+    renderPlayers();
+    if (S.isHost) sendConfig({ config: S.config }, peerId);
+    announce();
+  });
+
+  onConfig((data) => {
+    if (S.isHost || !data?.config) return;
+    S.config = {
+      extras: Array.isArray(data.config.extras) ? data.config.extras : [],
+      timer: data.config.timer || 60,
+      rounds: data.config.rounds || 5,
+    };
+    syncConfigUI();
+  });
+
+  S.room.onPeerJoin(peerId => {
+    console.log('peer join', peerId);
+    setTimeout(announce, 250);
+  });
+  S.room.onPeerLeave(peerId => {
+    S.peers.delete(peerId);
+    renderPlayers();
+  });
+
+  onAnswers((data) => {
+    if (!S.isHost) return;
+    console.log('HOST onAnswers', data);
+    const name = data?.name;
+    if (!name) return;
+    const answers = data.answers || {};
+    if (normName(name) === normName(S.name)) { S.answers = answers; return; }
+    for (const p of S.peers.values()) {
+      if (normName(p.name) === normName(name)) {
+        p.answers = answers;
+        break;
+      }
+    }
+    renderPlayers();
+  });
+
+  onRoundStart((data) => {
+    if (S.isHost) return;
+    if (!data?.letter || !Array.isArray(data.categories)) {
+      toast('Errore: dati round mancanti');
+      return;
+    }
+    clientStartRound(data);
+  });
+
+  onResults((data) => {
+    if (S.isHost) return;
+    if (Array.isArray(data.scores)) S.scores = new Map(data.scores);
+    renderStandings();
+    renderResults(data.results);
+    D.resultsTitle.textContent = data.isLast ? 'Classifica finale' : 'Risultati manche';
+    D.btnNext.hidden = true;
+    showScreen('results');
+  });
+
+  setTimeout(announce, 400);
+}
+
+// ------------------------------------------------------------
+// LOBBY
+// ------------------------------------------------------------
+D.btnCreate.addEventListener('click', () => {
+  ensureName();
+  const code = codeRoom();
+  const url = new URL(location.href);
+  url.searchParams.set('room', code);
+  history.pushState({}, '', url);
+  initRoom(true, code);
+});
+
+D.btnJoin.addEventListener('click', () => {
+  ensureName();
+  const code = (D.inputCode.value || '').trim().toUpperCase();
+  if (!code) { toast('Inserisci un codice stanza'); return; }
+  const url = new URL(location.href);
+  url.searchParams.set('room', code);
+  history.pushState({}, '', url);
+  initRoom(false, code);
+});
+
+D.btnShare.addEventListener('click', () => {
+  const url = `${location.origin}${location.pathname}?room=${S.roomCode}`;
+  const text = encodeURIComponent(`Gioca a Nomi Cose Città! ${url}`);
+  window.open(`https://wa.me/?text=${text}`, '_blank');
+});
+
+D.extraCats.addEventListener('change', () => {
+  if (!S.isHost) return;
+  S.config.extras = [...D.extraCats.querySelectorAll('.chip-check:checked')].map(c => c.value);
+  broadcastConfig();
+});
+D.timerOpts.addEventListener('change', () => {
+  if (!S.isHost) return;
+  const sel = D.timerOpts.querySelector('.chip-check:checked');
+  if (sel) S.config.timer = parseInt(sel.value, 10);
+  broadcastConfig();
+});
+D.roundsOpts.addEventListener('change', () => {
+  if (!S.isHost) return;
+  const sel = D.roundsOpts.querySelector('.chip-check:checked');
+  if (sel) S.config.rounds = parseInt(sel.value, 10);
+  broadcastConfig();
+});
+
+function broadcastConfig() {
+  if (S.isHost && S.send.config) S.send.config({ config: S.config });
+}
+
+function syncConfigUI() {
+  if (D.extraCats) {
+    D.extraCats.querySelectorAll('.chip-check').forEach(cb => {
+      cb.checked = S.config.extras.includes(cb.value);
+    });
+  }
+  if (D.timerOpts) {
+    D.timerOpts.querySelectorAll('.chip-check').forEach(rb => {
+      rb.checked = parseInt(rb.value, 10) === S.config.timer;
+    });
+  }
+  if (D.roundsOpts) {
+    D.roundsOpts.querySelectorAll('.chip-check').forEach(rb => {
+      rb.checked = parseInt(rb.value, 10) === S.config.rounds;
+    });
+  }
+}
+
+// ------------------------------------------------------------
+// RENDER GIOCATORI
+// ------------------------------------------------------------
+function renderPlayers() {
+  if (!D.playerList) return;
+  const list = [
+    { name: S.name + ' (tu)', isHost: S.isHost },
+    ...[...S.peers.values()].map(p => ({ name: p.name, isHost: p.isHost })),
+  ];
+  D.playerCount.textContent = `(${list.length})`;
+  D.playerList.innerHTML = list.map(p => `
+    <li>
+      <span class="player-name">${esc(p.name)}</span>
+      <span class="player-tag ${p.isHost ? 'host' : ''}">
+        ${p.isHost ? 'Host' : 'In gioco'}
+      </span>
+    </li>`).join('');
+  if (D.gamePlayerList) {
+    D.gamePlayerList.innerHTML = list.map(p => `
+      <li>
+        <span class="player-name">${esc(p.name)}</span>
+        <span class="player-tag ${p.isHost ? 'host' : ''}">
+          ${p.isHost ? 'Host' : 'In gioco'}
+        </span>
+      </li>`).join('');
+  }
+}
+
+// ------------------------------------------------------------
+// AVVIO MANCHE
+// ------------------------------------------------------------
+D.btnStart.addEventListener('click', () => {
+  if (S.isHost) hostStartRound();
+});
+
+function hostStartRound() {
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  const letter = pickLetter(seed, S.round.prevLetter);
+
+  S.round.num += 1;
+  S.round.letter = letter;
+  S.round.prevLetter = letter;
+  S.round.timer = S.config.timer;
+  S.round.active = true;
+
+  for (const p of S.peers.values()) { p.answers = null; }
+
+  const cats = activeCategories();
+
+  prepareGameUI(letter, S.round.num, seed, cats);
+  S.send.roundStart({ letter, num: S.round.num, seed, timer: S.round.timer, categories: cats });
+  runTimer(S.round.timer);
+  showScreen('game');
+}
+
+function clientStartRound(data) {
+  S.round.num = data.num;
+  S.round.letter = data.letter;
+  S.round.timer = data.timer;
+  S.round.active = true;
+  prepareGameUI(data.letter, data.num, data.seed, data.categories);
+  runTimer(data.timer);
+  showScreen('game');
+}
+
+function prepareGameUI(letter, num, seed, cats) {
+  D.roundLetter.textContent = letter;
+  D.roundNumber.textContent = `Manche ${num} di ${S.config.rounds}`;
+  D.roundSeed.textContent = `seed: ${seed}`;
+  D.roundTimerBox.classList.remove('warning', 'danger');
+
+  D.categoryInputs.innerHTML = cats.map(c => `
+    <div class="cat-row" data-cat="${esc(c)}">
+      <div class="cat-top">
+        <span class="cat-name">${esc(c)}</span>
+        <span class="cat-status" data-status="${esc(c)}">—</span>
+      </div>
+      <input class="input" type="text" data-input="${esc(c)}"
+             placeholder="${esc(c)} con la ${esc(letter)}..." autocomplete="off">
+    </div>`).join('');
+
+  S.answers = {};
+
+  D.categoryInputs.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', (e) => {
+      S.answers[e.target.dataset.input] = e.target.value.trim();
+    });
   });
 }
+
+// ------------------------------------------------------------
+// TIMER
+// ------------------------------------------------------------
+function runTimer(seconds) {
+  stopTimer();
+  S.round.remaining = seconds;
+  D.roundTimer.textContent = fmt(seconds);
+  S.interval = setInterval(() => {
+    S.round.remaining -= 1;
+    D.roundTimer.textContent = fmt(S.round.remaining);
+    if (S.round.remaining <= 10 && S.round.remaining > 0) D.roundTimerBox.classList.add('warning');
+    if (S.round.remaining <= 5) { D.roundTimerBox.classList.remove('warning'); D.roundTimerBox.classList.add('danger'); }
+    if (S.round.remaining <= 0) { stopTimer(); onTimeUp(); }
+  }, 1000);
+}
+
+function stopTimer() {
+  if (S.interval) { clearInterval(S.interval); S.interval = null; }
+}
+
+// ------------------------------------------------------------
+// FINE TEMPO
+// ------------------------------------------------------------
+function onTimeUp() {
+  if (!S.round.active) return;
+  S.round.active = false;
+  stopTimer();
+
+  if (S.isHost) {
+    // L'host aspetta 4s per raccogliere le risposte dei client, poi calcola
+    toast('Tempo scaduto! Calcolo dei risultati...', 2000);
+    setTimeout(() => scoreRound(), 4000);
+  } else {
+    // Il client invia le risposte all'host, poi aspetta i risultati
+    if (S.send.answers) S.send.answers({ name: S.name, answers: S.answers });
+    toast('Tempo scaduto! Attendo i risultati...', 3000);
+  }
+}
+
+// ------------------------------------------------------------
+// PUNTEGGI (host)
+// ------------------------------------------------------------
+async function scoreRound() {
+  const players = [
+    { name: S.name, answers: S.answers },
+    ...[...S.peers.values()].map(p => ({ name: p.name, answers: p.answers || {} })),
+  ];
+
+  const cats = activeCategories();
+  const results = {};
+  const totals = new Map();
+
+  for (const cat of cats) {
+    results[cat] = [];
+    for (const pl of players) {
+      const word = (pl.answers[cat] || '').trim();
+      const valid = word ? await askGemini(word, S.round.letter, cat) : false;
+      results[cat].push({ playerName: pl.name, word, valid, points: 0 });
+    }
+  }
+
+  for (const cat of cats) {
+    const entries = results[cat];
+    const counts = {};
+    for (const e of entries) {
+      if (e.valid && e.word) {
+        const k = e.word.toLowerCase();
+        counts[k] = (counts[k] || 0) + 1;
+      }
+    }
+    for (const e of entries) {
+      if (!e.valid || !e.word) { e.points = 0; continue; }
+      const k = e.word.toLowerCase();
+      e.points = counts[k] > 1 ? 5 : 10;
+    }
+  }
+
+  for (const cat of cats) {
+    for (const e of results[cat]) {
+      if (!totals.has(e.playerName)) totals.set(e.playerName, { name: e.playerName, points: 0 });
+      totals.get(e.playerName).points += e.points;
+    }
+  }
+
+  for (const t of totals.values()) {
+    if (!S.scores.has(t.name)) S.scores.set(t.name, { name: t.name, total: 0 });
+    S.scores.get(t.name).total += t.points;
+  }
+
+  const isLast = S.round.num >= S.config.rounds;
+
+  if (S.send.results) {
+    S.send.results({ results, scores: [...S.scores.entries()], isLast });
+  }
+
+  renderStandings();
+  renderResults(results);
+  D.resultsTitle.textContent = isLast ? 'Classifica finale' : 'Risultati manche';
+  D.btnNext.hidden = !S.isHost || isLast;
+  showScreen('results');
+}
+
+// ------------------------------------------------------------
+// GEMINI
+// ------------------------------------------------------------
+async function askGemini(word, letter, category) {
+  if (word.length < 2) return false;
+  if (word[0].toUpperCase() !== letter) return false;
+
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ word, letter, category }),
+    });
+    if (!res.ok) {
+      console.warn('Worker error:', res.status);
+      return false;
+    }
+    const data = await res.json();
+    if (data.error) {
+      console.warn('Worker:', data.error);
+      return false;
+    }
+    return data.valid === true;
+  } catch (e) {
+    console.warn('Worker fetch failed', e);
+    return false;
+  }
+}
+
+// ------------------------------------------------------------
+// RENDER RISULTATI E CLASSIFICA
+// ------------------------------------------------------------
+function renderStandings() {
+  if (!D.standings) return;
+  const arr = [...S.scores.values()].sort((a, b) => b.total - a.total);
+  if (!arr.length) {
+    D.standings.innerHTML = '<p class="muted">Nessun punteggio.</p>';
+    return;
+  }
+  D.standings.innerHTML = `<div class="standings">${arr.map((s, i) => `
+    <div class="standing-row ${i === 0 ? 'first' : ''}">
+      <span class="standing-pos">${i + 1}°</span>
+      <span class="standing-name">${esc(s.name)}</span>
+      <span class="standing-points">${s.total} pt</span>
+    </div>`).join('')}</div>`;
+}
+
+function renderResults(results) {
+  if (!D.results) return;
+  if (!results) { D.results.innerHTML = '<p class="muted">Nessun risultato.</p>'; return; }
+  D.results.innerHTML = Object.entries(results).map(([cat, entries]) => {
+    const rows = entries.map(e => {
+      const status = e.word ? (e.valid ? '' : '(non valida)') : '(vuoto)';
+      return `<div class="result-row">
+        <span>${esc(e.playerName)}: <span class="${e.word && !e.valid ? 'word-dup' : ''}">${esc(e.word || '—')}</span> ${status}</span>
+        <span class="points">${e.points} pt</span>
+      </div>`;
+    }).join('');
+    return `<div class="result-cat"><div class="result-cat-title">${esc(cat)}</div>${rows}</div>`;
+  }).join('');
+}
+
+// ------------------------------------------------------------
+// PROSSIMA MANCHE
+// ------------------------------------------------------------
+D.btnNext.addEventListener('click', () => {
+  if (!S.isHost) return;
+  if (S.round.num >= S.config.rounds) return;
+  S.answers = {};
+  renderPlayers();
+  hostStartRound();
+});
+
+// ------------------------------------------------------------
+// BOOT
+// ------------------------------------------------------------
+(function boot() {
+  if (D.inputName) {
+    const saved = localStorage.getItem(STORAGE_NAME);
+    if (saved) D.inputName.value = saved;
+  }
+
+  const params = new URLSearchParams(location.search);
+  let code = params.get('room');
+  if (!code && location.search.includes('room=')) {
+    const m = location.search.match(/[?&]room=([^&]+)/);
+    if (m) code = decodeURIComponent(m[1]);
+  }
+
+  if (code) {
+    ensureName();
+    initRoom(false, code.toUpperCase());
+  } else {
+    showScreen('lobby');
+  }
+})();
