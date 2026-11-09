@@ -1,5 +1,5 @@
 // ============================================================
-// Cloudflare Worker — Gemini 3.5 Flash-Lite come arbitro
+// Cloudflare Worker — Gemini come arbitro (senza binding AI)
 // ============================================================
 
 const corsHeaders = {
@@ -43,13 +43,12 @@ export default {
       return jsonResponse({ valid: false });
     }
 
+    // Nessun binding AI: usiamo solo la chiave API di Gemini come secret
     const apiKey = env.GEMINI_API_KEY;
     if (!apiKey) {
       return jsonResponse({ error: 'GEMINI_API_KEY not configured' }, 500);
     }
 
-    // Prompt semplificato: l'output strutturato JSON è già vincolato dallo schema,
-    // non è più necessario chiedere al modello di rispondere "sì" o "no".
     const systemInstruction = `Sei l'arbitro del gioco italiano "Nomi Cose Città".
 Decidi se la parola "${word}" è valida come "${category}" e inizia con la lettera "${letter}".
 Regole:
@@ -62,25 +61,20 @@ Regole:
 
     const geminiUrl =
       'https://generativelanguage.googleapis.com/v1beta/models/' +
-      'gemini-3.5-flash-lite:generateContent';
+      'gemini-2.5-flash-lite:generateContent';
 
     try {
       const geminiRes = await fetch(geminiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Correzione 1: la chiave API passa tramite header, non tramite URL ?key=
           'x-goog-api-key': apiKey,
         },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemInstruction }] },
           contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
           generationConfig: {
-            // Correzione 2: alzare maxOutputTokens per evitare che il thinking "consumi"
-            // il budget e lasci la risposta vuota. 64 è sufficiente e sicuro.
             maxOutputTokens: 64,
-            // Correzione 3: usare Structured Outputs per forzare il modello a restituire JSON
-            // con un campo booleano, eliminando la fragilità del parsing testuale di "sì"/"no".
             responseMimeType: 'application/json',
             responseSchema: {
               type: 'OBJECT',
@@ -89,7 +83,6 @@ Regole:
               },
               required: ['valid'],
             },
-            // 3.5 Flash-Lite supporta thinking, MINIMAL è adatto per classificazioni semplici
             thinkingConfig: { thinkingLevel: 'MINIMAL' },
           },
         }),
@@ -116,7 +109,6 @@ Regole:
         }, 502);
       }
 
-      // Correzione 4: parsing diretto del JSON, senza logica di normalizzazione del testo
       try {
         const parsed = JSON.parse(responseText);
         return jsonResponse({ valid: parsed.valid === true });
