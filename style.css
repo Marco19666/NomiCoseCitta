@@ -494,3 +494,90 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+
+/* ============ SPLASH SCREEN ============ */
+.splash-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #fff;
+  text-align: center;
+  background: radial-gradient(circle at 50% 35%, #347b58 0%, #17452f 72%);
+  transition: opacity .45s ease, visibility .45s ease;
+}
+.splash-screen.splash-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+.splash-content { animation: splash-in .65s ease both; }
+.splash-tiles { display: flex; justify-content: center; gap: 9px; margin-bottom: 25px; }
+.splash-tiles span {
+  display: grid; place-items: center; width: 54px; height: 62px;
+  border-radius: 13px; background: #fff; color: #236342;
+  font-size: 1.8rem; font-weight: 900; box-shadow: 0 8px 22px #102d2070;
+  transform: rotate(-5deg);
+}
+.splash-tiles span:nth-child(2) { transform: translateY(-8px) rotate(2deg); }
+.splash-tiles span:nth-child(3) { transform: rotate(6deg); }
+.splash-kicker { font-size: .7rem; font-weight: 800; letter-spacing: .2em; opacity: .75; }
+.splash-content h1 { margin-top: 8px; font-size: clamp(2rem, 8vw, 3rem); line-height: 1.1; letter-spacing: -.06em; }
+.splash-content h1 span { color: #f6c879; }
+.splash-subtitle { margin-top: 12px; color: #d8eadf; font-size: .95rem; }
+.splash-loader { width: 94px; height: 3px; margin: 30px auto 0; overflow: hidden; border-radius: 9px; background: #ffffff35; }
+.splash-loader span { display: block; width: 40%; height: 100%; border-radius: inherit; background: #f6c879; animation: splash-load .9s ease-in-out infinite alternate; }
+@keyframes splash-in { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes splash-load { from { transform: translateX(0); } to { transform: translateX(150%); } }
+
+/* ============ RIFINITURE UI ============ */
+:root {
+  --bg: #edf4ef;
+  --bg-accent: #dcebe1;
+  --surface: #fff;
+  --surface-2: #f4f8f5;
+  --border: #d8e5dc;
+  --primary: #28764d;
+  --primary-dark: #1d5b3a;
+  --secondary: #e8f1eb;
+  --secondary-text: #24543a;
+  --radius: 18px;
+  --radius-sm: 12px;
+  --shadow: 0 5px 18px rgba(28, 65, 43, .07);
+  --shadow-lg: 0 12px 32px rgba(20, 54, 35, .18);
+}
+body { background-image: radial-gradient(ellipse at top, #f7fbf8 0%, var(--bg) 58%, var(--bg-accent) 100%); }
+.app-header { padding: 15px max(18px, calc((100vw - 760px) / 2)); backdrop-filter: blur(12px); }
+.app-title { font-size: 1.18rem; letter-spacing: -.035em; }
+.app-main { max-width: 700px; padding: 22px 16px 40px; }
+.card { padding: 21px; margin-bottom: 18px; border-color: #dce8df; box-shadow: var(--shadow); transition: box-shadow .2s, transform .2s; }
+.card-title { font-size: 1.08rem; letter-spacing: -.02em; }
+.btn { min-height: 46px; font-weight: 700; box-shadow: 0 2px 5px rgba(25, 70, 43, .07); }
+.btn-primary { background: linear-gradient(135deg, #31885a, #236c46); }
+.btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, #28764d, #1d5b3a); transform: translateY(-1px); }
+.btn-secondary { background: #edf5ef; }
+.input { min-height: 46px; background: #fbfdfb; }
+.input:focus { background: #fff; }
+.chip { padding: 9px 13px; }
+.chip-selectable:has(.chip-check:checked) { box-shadow: inset 0 0 0 1px rgba(40, 118, 77, .08); }
+.game-status { background: linear-gradient(145deg, #fff, #f3f8f4); }
+.letter-value { display: grid; place-items: center; width: 78px; height: 78px; margin-top: 5px; border-radius: 22px; background: #e5f2e9; box-shadow: inset 0 0 0 1px #d3e8da; }
+.timer-value { margin-top: 7px; }
+#categoryInputs .input { font-size: 1rem; }
+.cat-row { padding-bottom: 12px; border-bottom: 1px solid #edf2ee; }
+.cat-row:last-child { padding-bottom: 0; border-bottom: 0; }
+.toast { border: 1px solid #ffffff25; }
+button:focus-visible, input:focus-visible { outline: 3px solid #e4b95f; outline-offset: 2px; }
+@media (max-width: 520px) {
+  .app-header { padding: 12px 14px; }
+  .app-main { padding: 14px 12px 28px; }
+  .card { padding: 17px; margin-bottom: 13px; }
+  .config-actions { flex-direction: column; }
+  .config-actions .btn { width: 100%; }
+  .join-input-row { flex-wrap: wrap; }
+  .join-input-row .btn { min-width: 86px; }
+  .letter-value { width: 68px; height: 68px; font-size: 2.5rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .splash-content, .splash-loader span { animation: none !important; }
+  .splash-screen, .card, .btn { transition: none !important; }
+}
