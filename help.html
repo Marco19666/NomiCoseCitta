@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#e8f5e9">
+  <title>Aiuto · Nomi Cose Città</title>
+  <style>
+    :root {
+      --bg: #e8f5e9;
+      --bg-accent: #c8e6c9;
+      --surface: #fff;
+      --surface-2: #f1f8f2;
+      --text: #1c2a20;
+      --muted: #5f7263;
+      --border: #c8dccb;
+      --primary: #2e7d52;
+      --primary-dark: #256641;
+      --secondary: #d9ecdb;
+      --secondary-text: #2a4a35;
+      --radius: 14px;
+      --shadow: 0 2px 10px rgba(28, 42, 32, .08);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      padding: 0 16px 32px;
+      color: var(--text);
+      background: linear-gradient(180deg, var(--bg), var(--bg-accent));
+      background-attachment: fixed;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    header {
+      margin: 0 -16px 22px;
+      padding: 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 1px 4px rgba(28, 42, 32, .06);
+    }
+    .header-inner { max-width: 720px; margin: auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { color: var(--primary-dark); font-size: 1.25rem; line-height: 1.2; }
+    main { max-width: 720px; margin: auto; }
+    .intro, section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .eyebrow { color: var(--primary); font-size: .75rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; margin-bottom: 6px; }
+    h2 { color: var(--primary-dark); font-size: 1.05rem; margin-bottom: 10px; }
+    p { margin: 7px 0; }
+    ul, ol { padding-left: 22px; margin: 8px 0; }
+    li { margin: 6px 0; }
+    .tip { background: var(--surface-2); border-left: 4px solid var(--primary); border-radius: 8px; padding: 11px 13px; margin-top: 12px; color: var(--secondary-text); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 42px; padding: 10px 16px; border: 0; border-radius: 10px;
+      background: var(--primary); color: #fff; font: inherit; font-weight: 700;
+      text-decoration: none; cursor: pointer; transition: background .2s, transform .08s;
+    }
+    .btn:hover { background: var(--primary-dark); }
+    .btn:active { transform: scale(.98); }
+    .btn-secondary { background: var(--secondary); color: var(--secondary-text); border: 1px solid var(--border); white-space: nowrap; }
+    .btn-secondary:hover { background: #c6dec9; }
+    .back-bottom { width: 100%; margin-top: 2px; }
+    @media (max-width: 420px) {
+      .header-inner { align-items: flex-start; flex-direction: column; }
+      .header-inner .btn { width: 100%; }
+      .intro, section { padding: 17px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>Aiuto · Nomi Cose Città</h1>
+      <a class="btn btn-secondary" href="index.html">← Torna al gioco</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="intro">
+      <p class="eyebrow">Guida rapida</p>
+      <h2>Come si gioca</h2>
+      <p>Il classico gioco Nomi, Cose, Città: scegli le categorie, osserva la lettera estratta e trova una risposta valida per ogni categoria prima che scada il tempo.</p>
+    </div>
+
+    <section>
+      <h2>1. Inizia una partita</h2>
+      <ul>
+        <li><strong>Sfida contro il computer:</strong> giochi da solo contro l'avversario virtuale. Puoi scegliere la difficoltà.</li>
+        <li><strong>Crea stanza:</strong> crea una partita multiplayer e condividi il codice stanza con gli amici.</li>
+        <li><strong>Entra:</strong> inserisci il codice ricevuto per unirti alla stanza di un altro giocatore.</li>
+      </ul>
+      <p class="tip">Inserisci un nome prima di iniziare: sarà quello mostrato agli altri partecipanti.</p>
+    </section>
+
+    <section>
+      <h2>2. Scegli le impostazioni</h2>
+      <ul>
+        <li>Le categorie fisse sono <strong>Cose, Nomi e Città</strong>.</li>
+        <li>Puoi aggiungere categorie extra, per esempio Animali, Mestieri, Colori, Film, Cantanti, Sport, Cibo, Letteratura, Autori, Piante e fiori, Strumenti musicali e Personaggi storici.</li>
+        <li>Imposta la durata di ogni manche: <strong>30, 60, 90 o 120 secondi</strong>.</li>
+        <li>Scegli se giocare <strong>5, 10 o 15 manche</strong>.</li>
+        <li>Nella sfida contro il computer puoi selezionare la difficoltà Facile, Medio o Difficile.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>3. Durante la manche</h2>
+      <ol>
+        <li>Guarda la lettera mostrata sullo schermo.</li>
+        <li>Scrivi una parola per ogni categoria: la risposta deve iniziare con quella lettera.</li>
+        <li>Completa le risposte e premi <strong>Ho finito!</strong> prima dello scadere del timer.</li>
+        <li>Se il tempo termina, la manche viene chiusa automaticamente.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>4. Risultati e punteggi</h2>
+      <p>Al termine della manche vengono mostrati i risultati e la classifica. Controlla il dettaglio delle risposte e il punteggio assegnato. Quando disponibile, l'host può avviare la manche successiva. Alla fine della partita viene mostrata la classifica finale.</p>
+    </section>
+
+    <section>
+      <h2>5. Giocare con gli amici</h2>
+      <ul>
+        <li>Chi crea la stanza è l'host e sceglie le impostazioni.</li>
+        <li>Condividi il codice della stanza, anche tramite WhatsApp usando il pulsante dedicato.</li>
+        <li>Gli altri giocatori entrano inserendo lo stesso codice.</li>
+        <li>L'host avvia la partita quando tutti sono pronti.</li>
+      </ul>
+      <p class="tip">Per una partita multiplayer, tutti i partecipanti devono mantenere aperta la pagina durante il gioco e usare una connessione Internet stabile.</p>
+    </section>
+
+    <a class="btn back-bottom" href="index.html">← Torna a Nomi Cose Città</a>
+  </main>
+</body>
+</html>
